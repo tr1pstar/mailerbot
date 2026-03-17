@@ -127,13 +127,16 @@ def _safe_decode(payload: bytes, charset: str) -> str:
     """Decode bytes with fallback for unknown/broken charsets."""
     charset = (charset or "utf-8").lower().strip()
     # Map broken charset names to valid ones
+    # Normalize and map broken charset names
     charset_map = {
         "unknown-8bit": "latin-1",
+        "unknown-8Bit": "latin-1",
+        "unknown-8BIT": "latin-1",
         "x-unknown": "latin-1",
         "unknown": "latin-1",
         "default": "utf-8",
     }
-    charset = charset_map.get(charset, charset)
+    charset = charset_map.get(charset, charset_map.get(charset.lower(), charset))
     try:
         return payload.decode(charset, errors="replace")
     except (LookupError, UnicodeDecodeError):
