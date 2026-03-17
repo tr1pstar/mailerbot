@@ -190,28 +190,33 @@ def zoho_fetch_new_messages(imap: imaplib.IMAP4_SSL) -> list[dict]:
 
 
 async def poll_zoho(app: Application) -> None:
-    """Поллинг Zoho IMAP каждые 15 секунд."""
+    """Поллинг Zoho IMAP каждые 5 секунд."""
     logger.info("Zoho IMAP poller started.")
     while True:
         try:
             loop = asyncio.get_event_loop()
             messages = await loop.run_in_executor(None, _zoho_fetch_sync)
 
-            if messages:
-                all_zoho = storage.get_all_zoho_addresses()
-                for msg in messages:
-                    to_addr = msg["to"].lower()
-                    # Ищем кому принадлежит этот адрес
-                    for uid, addresses in all_zoho.items():
-                        for addr in addresses:
-                            if addr.lower() in to_addr:
-                                known = storage.get_known_ids(uid, addr, source="zoho")
-                                if msg["id"] not in known:
-                                    storage.add_known_id(uid, addr, msg["id"], source="zoho")
-                                    await _notify_zoho(app, int(uid), addr, msg)
+            logger.info(f"Zoho poll: fetched {len(messages)} messages total")
+
+            all_zoho = storage.get_all_zoho_addresses()
+            logger.info(f"Zoho poll: watching addresses: {all_zoho}")
+
+            for msg in messages:
+                to_addr = msg["to"].lower()
+                logger.info(f"Zoho poll: checking msg id={msg['id']} to={to_addr}")
+                for uid, addresses in all_zoho.items():
+                    for addr in addresses:
+                        if addr.lower() in to_addr:
+                            known = storage.get_known_ids(uid, addr, source="zoho")
+                            logger.info(f"Zoho poll: match! addr={addr} known_count={len(known)} msg_id={msg['id']} new={msg['id'] not in known}")
+                            if msg["id"] not in known:
+                                storage.add_known_id(uid, addr, msg["id"], source="zoho")
+                                await _notify_zoho(app, int(uid), addr, msg)
+                                logger.info(f"Zoho poll: notified uid={uid} addr={addr}")
 
         except Exception as e:
-            logger.error(f"Zoho poll error: {e}")
+            logger.error(f"Zoho poll error: {e}", exc_info=True)
 
         await asyncio.sleep(5)
 
