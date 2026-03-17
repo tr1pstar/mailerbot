@@ -123,6 +123,23 @@ def zoho_imap_connect() -> imaplib.IMAP4_SSL | None:
         return None
 
 
+def _safe_decode(payload: bytes, charset: str) -> str:
+    """Decode bytes with fallback for unknown/broken charsets."""
+    charset = (charset or "utf-8").lower().strip()
+    # Map broken charset names to valid ones
+    charset_map = {
+        "unknown-8bit": "latin-1",
+        "x-unknown": "latin-1",
+        "unknown": "latin-1",
+        "default": "utf-8",
+    }
+    charset = charset_map.get(charset, charset)
+    try:
+        return payload.decode(charset, errors="replace")
+    except (LookupError, UnicodeDecodeError):
+        return payload.decode("latin-1", errors="replace")
+
+
 def zoho_fetch_new_messages(imap: imaplib.IMAP4_SSL) -> list[dict]:
     messages = []
     try:
@@ -146,11 +163,15 @@ def zoho_fetch_new_messages(imap: imaplib.IMAP4_SSL) -> list[dict]:
                     ct = part.get_content_type()
                     if ct == "text/plain":
                         charset = part.get_content_charset() or "utf-8"
-                        body = part.get_payload(decode=True).decode(charset, errors="replace")
+                        payload = part.get_payload(decode=True)
+                        if payload:
+                            body = _safe_decode(payload, charset)
                         break
             else:
                 charset = msg.get_content_charset() or "utf-8"
-                body = msg.get_payload(decode=True).decode(charset, errors="replace")
+                payload = msg.get_payload(decode=True)
+                if payload:
+                    body = _safe_decode(payload, charset)
 
             messages.append({
                 "id": uid.decode(),
