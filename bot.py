@@ -143,6 +143,39 @@ def _safe_decode(payload: bytes, charset: str) -> str:
         return payload.decode("latin-1", errors="replace")
 
 
+def _parse_body(msg) -> str:
+    """Extract text body from email message with full encoding fallback."""
+    body = ""
+    try:
+        if msg.is_multipart():
+            for part in msg.walk():
+                if part.get_content_type() == "text/plain":
+                    payload = part.get_payload(decode=True)
+                    if payload:
+                        charset = part.get_content_charset() or "utf-8"
+                        body = _safe_decode(payload, charset)
+                        break
+            if not body:
+                # fallback: try html part
+                for part in msg.walk():
+                    if part.get_content_type() == "text/html":
+                        payload = part.get_payload(decode=True)
+                        if payload:
+                            charset = part.get_content_charset() or "utf-8"
+                            html = _safe_decode(payload, charset)
+                            body = re.sub(r"<[^>]+>", " ", html)
+                            body = re.sub(r"\s+", " ", body).strip()
+                            break
+        else:
+            payload = msg.get_payload(decode=True)
+            if payload:
+                charset = msg.get_content_charset() or "utf-8"
+                body = _safe_decode(payload, charset)
+    except Exception as e:
+        logger.warning(f"Body parse error: {e}")
+    return body
+
+
 def zoho_fetch_new_messages(imap: imaplib.IMAP4_SSL) -> list[dict]:
     messages = []
     try:
@@ -150,40 +183,28 @@ def zoho_fetch_new_messages(imap: imaplib.IMAP4_SSL) -> list[dict]:
         _, data = imap.search(None, "ALL")
         ids = data[0].split()
         for uid in ids:
-            _, msg_data = imap.fetch(uid, "(RFC822)")
-            raw = msg_data[0][1]
-            msg = email.message_from_bytes(raw)
+            try:
+                _, msg_data = imap.fetch(uid, "(RFC822)")
+                raw = msg_data[0][1]
+                msg = email.message_from_bytes(raw)
 
-            subject  = decode_mime_header(msg.get("Subject", "(no subject)"))
-            from_    = decode_mime_header(msg.get("From", "unknown"))
-            to_      = decode_mime_header(msg.get("To", ""))
-            date_    = msg.get("Date", "")
+                subject = decode_mime_header(msg.get("Subject", "(no subject)"))
+                from_   = decode_mime_header(msg.get("From", "unknown"))
+                to_     = decode_mime_header(msg.get("To", ""))
+                date_   = msg.get("Date", "")
+                body    = _parse_body(msg)
 
-            # Извлекаем тело
-            body = ""
-            if msg.is_multipart():
-                for part in msg.walk():
-                    ct = part.get_content_type()
-                    if ct == "text/plain":
-                        charset = part.get_content_charset() or "utf-8"
-                        payload = part.get_payload(decode=True)
-                        if payload:
-                            body = _safe_decode(payload, charset)
-                        break
-            else:
-                charset = msg.get_content_charset() or "utf-8"
-                payload = msg.get_payload(decode=True)
-                if payload:
-                    body = _safe_decode(payload, charset)
-
-            messages.append({
-                "id": uid.decode(),
-                "subject": subject,
-                "from": from_,
-                "to": to_,
-                "date": date_,
-                "body": body,
-            })
+                messages.append({
+                    "id": uid.decode(),
+                    "subject": subject,
+                    "from": from_,
+                    "to": to_,
+                    "date": date_,
+                    "body": body,
+                })
+            except Exception as e:
+                logger.warning(f"IMAP skip msg {uid}: {e}")
+                continue
     except Exception as e:
         logger.error(f"IMAP fetch error: {e}")
     return messages
@@ -572,11 +593,16 @@ async def _show_zoho_inbox(target, uid: str, address: str) -> None:
         await send(f"📭 Нет писем для <code>{escape(address)}</code>.", parse_mode="HTML")
         return
 
-    lines = [f"📬 <b>{escape(address)}</b> — {len(messages)} письмо(а):\n"]
+    lines   = [f"📬 <b>{escape(address)}</b> — {len(messages)} письмо(а):\n"]
+    buttons = []
     for i, m in enumerate(messages[:15], 1):
         lines.append(f"✉️ {i}. <b>{escape(m['subject'])}</b>\n   👤 {escape(m['from'])}")
+        buttons.append([InlineKeyboardButton(
+            f"📖 #{i} {m['subject'][:35]}",
+            callback_data=f"readzh:{address}:{m['id']}",
+        )])
 
-    buttons = [[InlineKeyboardButton("🔄 Обновить", callback_data=f"inbox:zh:{address}")]]
+    buttons.append([InlineKeyboardButton("🔄 Обновить", callback_data=f"inbox:zh:{address}")])
     await send("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
 
 
@@ -665,6 +691,36 @@ async def callback_read(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data=f"inbox:tm:{address}")]]))
 
 
+async def callback_read_zoho(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    q   = update.callback_query
+    await q.answer("⏳ Загружаю…")
+    _, address, msg_id = q.data.split(":", 2)
+
+    await q.edit_message_text("🔄 Читаю письмо…")
+    loop    = asyncio.get_event_loop()
+    messages = await loop.run_in_executor(None, _zoho_fetch_for_address, address)
+    msg     = next((m for m in messages if m["id"] == msg_id), None)
+
+    if not msg:
+        await q.edit_message_text("❌ Письмо не найдено.")
+        return
+
+    body    = msg.get("body", "")
+    preview = (body[:2500] + "\n<i>…обрезано</i>") if len(body) > 2500 else body
+
+    text = (
+        f"📨 <b>{escape(msg['subject'])}</b>\n\n"
+        f"👤 От: {escape(msg['from'])}\n"
+        f"📧 Ящик: <code>{escape(address)}</code>\n"
+        f"🕐 Дата: {escape(msg['date'])}\n"
+        f"{'─'*28}\n\n<pre>{escape(preview)}</pre>"
+    )
+    await q.edit_message_text(text, parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("◀️ Назад", callback_data=f"inbox:zh:{address}")
+        ]]))
+
+
 async def cmd_remove(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     uid    = str(update.effective_user.id)
     mailtm = storage.get_mailtm_accounts(uid)
@@ -714,7 +770,8 @@ def main() -> None:
     app.add_handler(CommandHandler("remove", cmd_remove))
     app.add_handler(CallbackQueryHandler(callback_create, pattern=r"^create:"))
     app.add_handler(CallbackQueryHandler(callback_inbox,  pattern=r"^inbox:"))
-    app.add_handler(CallbackQueryHandler(callback_read,   pattern=r"^read:"))
+    app.add_handler(CallbackQueryHandler(callback_read,    pattern=r"^read:"))
+    app.add_handler(CallbackQueryHandler(callback_read_zoho, pattern=r"^readzh:"))
     app.add_handler(CallbackQueryHandler(callback_remove, pattern=r"^rm:"))
 
     app.job_queue.run_once(lambda ctx: asyncio.create_task(restore_listeners(app)), when=2)
