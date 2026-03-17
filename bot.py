@@ -147,7 +147,7 @@ def zoho_fetch_new_messages(imap: imaplib.IMAP4_SSL) -> list[dict]:
     messages = []
     try:
         imap.select("INBOX")
-        _, data = imap.search(None, "UNSEEN")
+        _, data = imap.search(None, "ALL")
         ids = data[0].split()
         for uid in ids:
             _, msg_data = imap.fetch(uid, "(RFC822)")
@@ -213,7 +213,7 @@ async def poll_zoho(app: Application) -> None:
         except Exception as e:
             logger.error(f"Zoho poll error: {e}")
 
-        await asyncio.sleep(15)
+        await asyncio.sleep(5)
 
 
 def _zoho_fetch_sync() -> list[dict]:
