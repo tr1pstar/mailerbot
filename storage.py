@@ -36,7 +36,15 @@ class Storage:
     """
 
     def _get_user(self, uid: str) -> dict:
-        return _load().get(uid, {"mailtm": {}, "zoho": {}})
+        data = _load().get(uid, {"mailtm": {}, "zoho": {}})
+        # Migrate old "accounts" key to "mailtm"
+        if "accounts" in data and "mailtm" not in data:
+            data["mailtm"] = data.pop("accounts")
+        elif "accounts" in data and "mailtm" in data:
+            data.pop("accounts")
+        data.setdefault("mailtm", {})
+        data.setdefault("zoho", {})
+        return data
 
     def _set_user(self, uid: str, data: dict) -> None:
         with _lock:
