@@ -23,73 +23,82 @@ def _save(data: dict) -> None:
 
 class Storage:
     """
-    Structure:
     {
-      "<user_id>": {
-        "accounts": {
-          "user@domain.com": {
-            "password": "...",
-            "token": "...",
-            "account_id": "...",
-            "seen": ["msg_id1", ...]
-          }
+      "<uid>": {
+        "mailtm": {
+          "addr@domain": {"password": "...", "token": "...", "account_id": "...", "seen": [...]}
+        },
+        "zoho": {
+          "addr@funmail.run": {"seen": [...]}
         }
       }
     }
     """
 
     def _get_user(self, uid: str) -> dict:
-        return _load().get(uid, {"accounts": {}})
+        return _load().get(uid, {"mailtm": {}, "zoho": {}})
 
-    def _set_user(self, uid: str, user_data: dict) -> None:
+    def _set_user(self, uid: str, data: dict) -> None:
         with _lock:
-            data = _load()
-            data[uid] = user_data
-            _save(data)
+            d = _load()
+            d[uid] = data
+            _save(d)
 
-    def get_accounts(self, uid: str) -> dict:
-        return self._get_user(uid).get("accounts", {})
+    # ── mail.tm ───────────────────────────────────────────────────────────────
 
-    def get_all_accounts(self) -> dict:
+    def get_mailtm_accounts(self, uid: str) -> dict:
+        return self._get_user(uid).get("mailtm", {})
+
+    def get_all_mailtm_accounts(self) -> dict:
         data = _load()
-        return {uid: v.get("accounts", {}) for uid, v in data.items()}
+        return {uid: v.get("mailtm", {}) for uid, v in data.items()}
 
-    def add_account(self, uid: str, address: str, password: str, token: str, account_id: str = "") -> None:
-        user = self._get_user(uid)
-        user.setdefault("accounts", {})[address] = {
-            "password": password,
-            "token": token,
-            "account_id": account_id,
-            "seen": [],
+    def add_mailtm_account(self, uid: str, address: str, password: str, token: str, account_id: str = "") -> None:
+        u = self._get_user(uid)
+        u.setdefault("mailtm", {})[address] = {
+            "password": password, "token": token,
+            "account_id": account_id, "seen": [],
         }
-        self._set_user(uid, user)
+        self._set_user(uid, u)
 
-    def remove_account(self, uid: str, address: str) -> None:
-        user = self._get_user(uid)
-        user.get("accounts", {}).pop(address, None)
-        self._set_user(uid, user)
+    def remove_mailtm_account(self, uid: str, address: str) -> None:
+        u = self._get_user(uid)
+        u.get("mailtm", {}).pop(address, None)
+        self._set_user(uid, u)
 
-    def update_token(self, uid: str, address: str, token: str) -> None:
+    # ── Zoho ──────────────────────────────────────────────────────────────────
+
+    def get_zoho_addresses(self, uid: str) -> list[str]:
+        return list(self._get_user(uid).get("zoho", {}).keys())
+
+    def get_all_zoho_addresses(self) -> dict:
+        data = _load()
+        return {uid: list(v.get("zoho", {}).keys()) for uid, v in data.items()}
+
+    def add_zoho_address(self, uid: str, address: str) -> None:
+        u = self._get_user(uid)
+        u.setdefault("zoho", {})[address] = {"seen": []}
+        self._set_user(uid, u)
+
+    def remove_zoho_address(self, uid: str, address: str) -> None:
+        u = self._get_user(uid)
+        u.get("zoho", {}).pop(address, None)
+        self._set_user(uid, u)
+
+    # ── Seen IDs ──────────────────────────────────────────────────────────────
+
+    def get_known_ids(self, uid: str, address: str, source: str = "mailtm") -> set:
+        u = self._get_user(uid)
+        return set(u.get(source, {}).get(address, {}).get("seen", []))
+
+    def add_known_id(self, uid: str, address: str, msg_id: str, source: str = "mailtm") -> None:
         with _lock:
             data = _load()
             try:
-                data[uid]["accounts"][address]["token"] = token
-            except KeyError:
-                pass
-            _save(data)
-
-    def get_known_ids(self, uid: str, address: str) -> set:
-        user = self._get_user(uid)
-        return set(user.get("accounts", {}).get(address, {}).get("seen", []))
-
-    def add_known_id(self, uid: str, address: str, msg_id: str) -> None:
-        with _lock:
-            data = _load()
-            try:
-                seen = data[uid]["accounts"][address].setdefault("seen", [])
+                seen = data[uid][source][address].setdefault("seen", [])
                 if msg_id not in seen:
                     seen.append(msg_id)
-                    data[uid]["accounts"][address]["seen"] = seen[-500:]
+                    data[uid][source][address]["seen"] = seen[-500:]
             except KeyError:
                 pass
             _save(data)
