@@ -1,0 +1,18 @@
+{
+  "815445545": {
+    "accounts": {
+      "ehamblet@sharebot.net": {
+        "password": "Bm8XRoqVKaCYRrye",
+        "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpYXQiOjE3NzM3MDMwNzcsInJvbGVzIjpbIlJPTEVfVVNFUiJdLCJhZGRyZXNzIjoiZWhhbWJsZXRAc2hhcmVib3QubmV0IiwiaWQiOiI2OWI4OGZhNTMyY2MxNmRlODgwYjA1M2QiLCJtZXJjdXJlIjp7InN1YnNjcmliZSI6WyIvYWNjb3VudHMvNjliODhmYTUzMmNjMTZkZTg4MGIwNTNkIl19fQ.zBocWQtQShbwqb-I3PhVa3iK4SNOU4DLMu5OmqGlKYtpDiYNRv7B3bsoSixENeXZhZGrtPL7XJVIoY5JUKBNCw",
+        "account_id": "69b88fa532cc16de880b053d",
+        "seen": []
+      },
+      "juliebowen@sharebot.net": {
+        "password": "k7uR8C3KKnU2Mstn",
+        "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpYXQiOjE3NzM3NzE2NzEsInJvbGVzIjpbIlJPTEVfVVNFUiJdLCJhZGRyZXNzIjoianVsaWVib3dlbkBzaGFyZWJvdC5uZXQiLCJpZCI6IjY5Yjk5Yjk3NmM2ZjFlZDdiMTAxZDhmZSIsIm1lcmN1cmUiOnsic3Vic2NyaWJlIjpbIi9hY2NvdW50cy82OWI5OWI5NzZjNmYxZWQ3YjEwMWQ4ZmUiXX19.-dbaYp2qO7rAs7WpVkKWdtrPd4FwRn3u_B2a7joDhxo5oVeR-o7c3zO2KtaN-p52V4X4k0sjHz6-N9fXQ-m5cA",
+        "account_id": "69b99b976c6f1ed7b101d8fe",
+        "seen": []
+      }
+    }
+  }
+}
