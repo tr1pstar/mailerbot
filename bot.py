@@ -24,6 +24,7 @@ from config import BOT_TOKEN, ZOHO_EMAIL, ZOHO_PASSWORD, ZOHO_DOMAIN, ZOHO_IMAP_
 from storage import Storage
 from cabbit import (
     cmd_cabbit, receive_name, cancel, callback_cabbit,
+    callback_kill, cmd_knife, cmd_leaderboard,
     box_notifier, NAMING_STATE, cabbit_db,
 )
 
@@ -788,7 +789,10 @@ def main() -> None:
         fallbacks=[CommandHandler("cancel", cancel)],
     )
     app.add_handler(cabbit_conv)
-    app.add_handler(CallbackQueryHandler(callback_cabbit, pattern=r"^cabbit:"))
+    app.add_handler(CallbackQueryHandler(callback_cabbit,  pattern=r"^cabbit:"))
+    app.add_handler(CallbackQueryHandler(callback_kill,    pattern=r"^kill:"))
+    app.add_handler(CommandHandler("knife",       cmd_knife))
+    app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
 
     app.job_queue.run_once(lambda ctx: asyncio.create_task(restore_listeners(app)), when=2)
     app.job_queue.run_once(lambda ctx: asyncio.create_task(poll_zoho(app)), when=3)
