@@ -13,32 +13,25 @@ logger = logging.getLogger(__name__)
 
 # ─── Константы ────────────────────────────────────────────────────────────────
 
-BOX_INTERVAL   = 30 * 60   # 30 минут в секундах
-NAMING_STATE   = 1         # состояние ConversationHandler
+BOX_INTERVAL    = 30 * 60    # 30 минут
+WARN_12H        = 12 * 3600  # предупреждение через 12ч без кормёжки
+WARN_23H        = 23 * 3600  # критическое предупреждение через 23ч
+DEATH_24H       = 24 * 3600  # смерть через 24ч
+NAMING_STATE    = 1
 
-# Еда: (название, эмодзи, шанс%, XP)
 FOOD_TABLE = [
     ("Морковь",   "🥕", 60,  80),
     ("Корм",      "🍗", 20,  200),
     ("Вкусность", "✨", 20,  500),
 ]
 
-# XP нужно для каждого уровня (индекс = уровень)
-# level 1 = 100 xp, level 2 = 250, level 3 = 500 ...
 def xp_for_level(level: int) -> int:
     return int(100 * (level ** 1.6))
 
 
-def total_xp_for_level(level: int) -> int:
-    """Суммарный XP нужный чтобы достичь level."""
-    return sum(xp_for_level(i) for i in range(1, level))
-
-
-# ─── Хранилище кеббита ────────────────────────────────────────────────────────
+# ─── Хранилище ────────────────────────────────────────────────────────────────
 
 class CabbitStorage:
-    """Кеббит хранится в отдельном файле cabbit.json."""
-
     FILE = "cabbit.json"
 
     def _load(self) -> dict:
@@ -60,12 +53,17 @@ class CabbitStorage:
         return self._load().get(uid)
 
     def create(self, uid: str, name: str) -> dict:
+        now = int(time.time())
         cabbit = {
             "name": name,
             "xp": 0,
             "level": 1,
             "box_available": True,
-            "box_ts": 0,         # когда появится следующая коробка (unix)
+            "box_ts": 0,
+            "last_fed": now,          # время последней кормёжки
+            "warned_12h": False,      # уже отправили предупреждение 12ч?
+            "warned_23h": False,      # уже отправили предупреждение 23ч?
+            "dead": False,
             "food_counts": {"Морковь": 0, "Корм": 0, "Вкусность": 0},
         }
         data = self._load()
@@ -88,7 +86,6 @@ cabbit_db = CabbitStorage()
 # ─── Игровая логика ───────────────────────────────────────────────────────────
 
 def roll_food() -> tuple[str, str, int]:
-    """Возвращает (название, эмодзи, xp) случайной еды."""
     r = random.randint(1, 100)
     cum = 0
     for name, emoji, chance, xp in FOOD_TABLE:
@@ -98,6 +95,28 @@ def roll_food() -> tuple[str, str, int]:
     return FOOD_TABLE[0][0], FOOD_TABLE[0][1], FOOD_TABLE[0][3]
 
 
+def hunger_bar(cabbit: dict) -> str:
+    """Показывает индикатор голода."""
+    now       = int(time.time())
+    last_fed  = cabbit.get("last_fed", now)
+    elapsed   = now - last_fed
+    pct_alive = max(0, 100 - int(elapsed / DEATH_24H * 100))
+
+    filled = pct_alive // 10
+    bar    = "❤️" * filled + "🖤" * (10 - filled)
+
+    if pct_alive > 60:
+        mood = "Сытый и довольный 😊"
+    elif pct_alive > 30:
+        mood = "Немного голоден 😐"
+    elif pct_alive > 10:
+        mood = "Очень голоден! 😨"
+    else:
+        mood = "Умирает от голода! 💀"
+
+    return f"{bar} {pct_alive}%\n{mood}"
+
+
 def cabbit_status(cabbit: dict) -> str:
     name   = cabbit["name"]
     level  = cabbit["level"]
@@ -105,12 +124,11 @@ def cabbit_status(cabbit: dict) -> str:
     needed = xp_for_level(level)
     pct    = min(int(xp / needed * 100), 100)
 
-    # прогресс-бар
     filled = pct // 10
     bar    = "█" * filled + "░" * (10 - filled)
 
-    box_ts  = cabbit.get("box_ts", 0)
-    now     = int(time.time())
+    box_ts    = cabbit.get("box_ts", 0)
+    now       = int(time.time())
     box_avail = cabbit.get("box_available", True) or now >= box_ts
 
     if box_avail:
@@ -121,27 +139,26 @@ def cabbit_status(cabbit: dict) -> str:
         secs = secs_left % 60
         box_str = f"⏳ Следующая коробка через {mins}м {secs}с"
 
-    counts = cabbit.get("food_counts", {})
-    food_str = " | ".join(
-        f"{e} {counts.get(n, 0)}" for n, e, _, _ in FOOD_TABLE
-    )
+    counts    = cabbit.get("food_counts", {})
+    food_str  = " | ".join(f"{e} {counts.get(n, 0)}" for n, e, _, _ in FOOD_TABLE)
+    hunger    = hunger_bar(cabbit)
 
     return (
         f"🐰 <b>{name}</b>\n"
         f"⭐️ Уровень: <b>{level}</b>\n"
         f"📊 XP: <b>{xp}</b> / <b>{needed}</b>\n"
         f"[{bar}] {pct}%\n\n"
+        f"❤️ Здоровье:\n{hunger}\n\n"
         f"🍽 Съедено: {food_str}\n\n"
         f"{box_str}"
     )
 
 
 def cabbit_keyboard(cabbit: dict) -> InlineKeyboardMarkup:
-    now     = int(time.time())
-    box_ts  = cabbit.get("box_ts", 0)
+    now       = int(time.time())
+    box_ts    = cabbit.get("box_ts", 0)
     box_avail = cabbit.get("box_available", True) or now >= box_ts
-
-    buttons = []
+    buttons   = []
     if box_avail:
         buttons.append([InlineKeyboardButton("📦 Открыть коробку", callback_data="cabbit:box")])
     buttons.append([InlineKeyboardButton("🔄 Обновить", callback_data="cabbit:refresh")])
@@ -149,7 +166,6 @@ def cabbit_keyboard(cabbit: dict) -> InlineKeyboardMarkup:
 
 
 def apply_xp(cabbit: dict, xp: int) -> tuple[bool, int]:
-    """Добавляет XP, обрабатывает левел-ап. Возвращает (leveled_up, new_level)."""
     cabbit["xp"] += xp
     leveled_up = False
     while cabbit["xp"] >= xp_for_level(cabbit["level"]):
@@ -161,7 +177,7 @@ def apply_xp(cabbit: dict, xp: int) -> tuple[bool, int]:
 
 # ─── Хендлеры ─────────────────────────────────────────────────────────────────
 
-CABBIT_PHOTO = "cabbit.jpg"   # файл с фото кеббита
+CABBIT_PHOTO = "cabbit.jpg"
 
 
 async def cmd_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -172,6 +188,19 @@ async def cmd_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "🐰 У тебя ещё нет кеббита!\n\nКак ты хочешь его назвать?"
         )
+        return NAMING_STATE
+
+    if cabbit.get("dead"):
+        await update.message.reply_text(
+            f"💀 <b>{cabbit['name']} умер от голода...</b>\n\n"
+            f"Ты не кормил его 24 часа. Кеббит ушёл в лучший мир.\n\n"
+            f"Хочешь завести нового? Напиши имя:",
+            parse_mode="HTML",
+        )
+        # Удаляем мёртвого кеббита
+        data = cabbit_db._load()
+        data.pop(uid, None)
+        cabbit_db._save(data)
         return NAMING_STATE
 
     await _send_cabbit_card(update.message, uid, cabbit)
@@ -189,8 +218,9 @@ async def receive_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cabbit = cabbit_db.create(uid, name)
     await update.message.reply_text(
         f"🎉 Познакомьтесь — <b>{name}</b>!\n\n"
-        f"Твой кеббит готов к приключениям. "
-        f"Каждые 30 минут появляется коробка с едой — не забывай кормить!",
+        f"Твой кеббит готов к приключениям.\n"
+        f"Каждые 30 минут появляется коробка с едой — не забывай кормить!\n"
+        f"⚠️ Если не кормить 24 часа — кеббит умрёт.",
         parse_mode="HTML",
     )
     await _send_cabbit_card(update.message, uid, cabbit)
@@ -203,24 +233,16 @@ async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def _send_cabbit_card(msg, uid: str, cabbit: dict):
-    """Отправляет карточку кеббита с фото."""
     import os
     status = cabbit_status(cabbit)
     kb     = cabbit_keyboard(cabbit)
-
     if os.path.exists(CABBIT_PHOTO):
         try:
             with open(CABBIT_PHOTO, "rb") as f:
-                await msg.reply_photo(
-                    photo=f,
-                    caption=status,
-                    parse_mode="HTML",
-                    reply_markup=kb,
-                )
+                await msg.reply_photo(photo=f, caption=status, parse_mode="HTML", reply_markup=kb)
             return
         except Exception:
             pass
-    # fallback без фото
     await msg.reply_text(status, parse_mode="HTML", reply_markup=kb)
 
 
@@ -232,7 +254,11 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cabbit = cabbit_db.get(uid)
 
     if not cabbit:
-        await q.edit_message_caption("❌ Сначала создай кеббита через /cabbit")
+        await q.answer("❌ Сначала создай кеббита через /cabbit", show_alert=True)
+        return
+
+    if cabbit.get("dead"):
+        await q.answer("💀 Твой кеббит умер. Напиши /cabbit чтобы завести нового.", show_alert=True)
         return
 
     if action == "refresh":
@@ -251,17 +277,17 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.answer("⏳ Коробка ещё не готова!", show_alert=True)
             return
 
-        # Открываем коробку
         food_name, food_emoji, food_xp = roll_food()
         leveled_up, new_level = apply_xp(cabbit, food_xp)
 
-        # Обновляем счётчики
         counts = cabbit.setdefault("food_counts", {"Морковь": 0, "Корм": 0, "Вкусность": 0})
         counts[food_name] = counts.get(food_name, 0) + 1
 
-        # Следующая коробка через 30 минут
         cabbit["box_available"] = False
         cabbit["box_ts"]        = now + BOX_INTERVAL
+        cabbit["last_fed"]      = now
+        cabbit["warned_12h"]    = False   # сброс предупреждений после кормёжки
+        cabbit["warned_23h"]    = False
 
         cabbit_db.save_cabbit(uid, cabbit)
 
@@ -282,36 +308,98 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
 
 
-# ─── Фоновый таймер: уведомления о коробке ───────────────────────────────────
+# ─── Фоновый таймер ───────────────────────────────────────────────────────────
 
 async def box_notifier(app) -> None:
-    """Каждые 60 секунд проверяем кому пора получить коробку и шлём уведомление."""
     logger.info("Cabbit box notifier started.")
     while True:
         await asyncio.sleep(60)
         try:
             now  = int(time.time())
             all_ = cabbit_db.get_all()
+
             for uid, cabbit in all_.items():
+                if cabbit.get("dead"):
+                    continue
+
+                name      = cabbit.get("name", "Кеббит")
+                last_fed  = cabbit.get("last_fed", now)
+                elapsed   = now - last_fed
+
+                # ── Смерть через 24ч ──────────────────────────────────────
+                if elapsed >= DEATH_24H:
+                    cabbit["dead"] = True
+                    cabbit_db.save_cabbit(uid, cabbit)
+                    try:
+                        await app.bot.send_message(
+                            chat_id=int(uid),
+                            text=(
+                                f"💀 <b>{name} умер от голода...</b>\n\n"
+                                f"Ты не кормил его 24 часа. Кеббит ушёл в лучший мир.\n"
+                                f"Напиши /cabbit чтобы завести нового. 😢"
+                            ),
+                            parse_mode="HTML",
+                        )
+                    except Exception as e:
+                        logger.warning(f"death notify uid={uid}: {e}")
+                    continue
+
+                # ── Критическое предупреждение 23ч ───────────────────────
+                if elapsed >= WARN_23H and not cabbit.get("warned_23h"):
+                    cabbit["warned_23h"] = True
+                    cabbit_db.save_cabbit(uid, cabbit)
+                    mins_left = (DEATH_24H - elapsed) // 60
+                    try:
+                        await app.bot.send_message(
+                            chat_id=int(uid),
+                            text=(
+                                f"☠️ <b>СРОЧНО! {name} умирает!</b>\n\n"
+                                f"Кеббит не ел уже 23 часа!\n"
+                                f"Если не покормить в течение {mins_left} минут — он умрёт навсегда!\n\n"
+                                f"Скорее напиши /cabbit!"
+                            ),
+                            parse_mode="HTML",
+                        )
+                    except Exception as e:
+                        logger.warning(f"warn_23h notify uid={uid}: {e}")
+                    continue
+
+                # ── Предупреждение 12ч ────────────────────────────────────
+                if elapsed >= WARN_12H and not cabbit.get("warned_12h"):
+                    cabbit["warned_12h"] = True
+                    cabbit_db.save_cabbit(uid, cabbit)
+                    try:
+                        await app.bot.send_message(
+                            chat_id=int(uid),
+                            text=(
+                                f"⚠️ <b>{name} голодает!</b>\n\n"
+                                f"Кеббит не ел уже 12 часов.\n"
+                                f"Покорми его или он умрёт через 12 часов!\n\n"
+                                f"Напиши /cabbit чтобы открыть коробку."
+                            ),
+                            parse_mode="HTML",
+                        )
+                    except Exception as e:
+                        logger.warning(f"warn_12h notify uid={uid}: {e}")
+
+                # ── Коробка готова ────────────────────────────────────────
                 box_ts    = cabbit.get("box_ts", 0)
                 box_avail = cabbit.get("box_available", True)
-
-                # Коробка стала доступна (время вышло, но ещё не уведомляли)
                 if not box_avail and now >= box_ts:
                     cabbit["box_available"] = True
                     cabbit_db.save_cabbit(uid, cabbit)
-                    name = cabbit.get("name", "Кеббит")
                     try:
                         await app.bot.send_message(
                             chat_id=int(uid),
                             text=(
                                 f"📦 <b>Новая коробка с едой!</b>\n\n"
-                                f"🐰 {name} голодает — не забудь покормить!\n"
+                                f"🐰 {name} ждёт — не забудь покормить!\n"
                                 f"Напиши /cabbit чтобы открыть."
                             ),
                             parse_mode="HTML",
                         )
                     except Exception as e:
                         logger.warning(f"box notify uid={uid}: {e}")
+
         except Exception as e:
             logger.error(f"box_notifier error: {e}")
