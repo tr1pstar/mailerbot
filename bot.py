@@ -15,10 +15,17 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
 )
 
 from config import BOT_TOKEN, ZOHO_EMAIL, ZOHO_PASSWORD, ZOHO_DOMAIN, ZOHO_IMAP_HOST
 from storage import Storage
+from cabbit import (
+    cmd_cabbit, receive_name, cancel, callback_cabbit,
+    box_notifier, NAMING_STATE, cabbit_db,
+)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -774,8 +781,18 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(callback_read_zoho, pattern=r"^readzh:"))
     app.add_handler(CallbackQueryHandler(callback_remove, pattern=r"^rm:"))
 
+    # Cabbit conversation handler
+    cabbit_conv = ConversationHandler(
+        entry_points=[CommandHandler("cabbit", cmd_cabbit)],
+        states={NAMING_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    app.add_handler(cabbit_conv)
+    app.add_handler(CallbackQueryHandler(callback_cabbit, pattern=r"^cabbit:"))
+
     app.job_queue.run_once(lambda ctx: asyncio.create_task(restore_listeners(app)), when=2)
     app.job_queue.run_once(lambda ctx: asyncio.create_task(poll_zoho(app)), when=3)
+    app.job_queue.run_once(lambda ctx: asyncio.create_task(box_notifier(app)), when=4)
 
     logger.info("Bot started.")
     app.run_polling(drop_pending_updates=True)
