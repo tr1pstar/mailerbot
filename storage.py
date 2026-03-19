@@ -2,7 +2,7 @@ import json
 import os
 from threading import Lock
 
-DATA_FILE = "data.json"
+DATA_FILE = "/app/data/data.json"
 _lock = Lock()
 
 
