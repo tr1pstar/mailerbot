@@ -28,8 +28,8 @@ from cabbit import (
     box_notifier, NAMING_STATE, cabbit_db,
 )
 from duel import (
-    callback_duel_send, callback_duel_accept,
-    callback_duel_decline, callback_duel_move,
+    callback_duel_send, callback_duel_stake,
+    callback_duel_accept, callback_duel_decline, callback_duel_move,
 )
 from promo import cmd_promo, cmd_createpromo, cmd_listpromos, cmd_deletepromo
 
@@ -797,6 +797,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(callback_cabbit,  pattern=r"^cabbit:"))
     app.add_handler(CallbackQueryHandler(callback_kill,         pattern=r"^kill:"))
     app.add_handler(CallbackQueryHandler(callback_duel_send,    pattern=r"^duel_send:"))
+    app.add_handler(CallbackQueryHandler(callback_duel_stake,   pattern=r"^duel_stake:"))
     app.add_handler(CallbackQueryHandler(callback_duel_accept,  pattern=r"^duel_accept:"))
     app.add_handler(CallbackQueryHandler(callback_duel_decline, pattern=r"^duel_decline:"))
     app.add_handler(CallbackQueryHandler(callback_duel_move,    pattern=r"^duel_move:"))
