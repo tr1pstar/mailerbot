@@ -342,6 +342,23 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"{cabbit_status(cabbit)}"
             )
             await _edit_card(q, cabbit, text)
+            # Уведомляем всех остальных пользователей
+            all_ = cabbit_db.get_all()
+            for other_uid, other_cab in all_.items():
+                if other_uid == uid or other_cab.get("dead"):
+                    continue
+                try:
+                    await q.message.bot.send_message(
+                        chat_id=int(other_uid),
+                        text=(
+                            "🔪 <b>Кто-то нашёл нож!</b>\n\n"
+                            "В одной из коробок был обнаружен нож.\n"
+                            "Один из кеббитов теперь вооружён — будь осторожен! 👀"
+                        ),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
             return
 
         leveled_up, new_level = apply_xp(cabbit, food_xp)
@@ -452,6 +469,24 @@ async def callback_kill(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.warning(f"kill notify target={target_uid}: {e}")
+
+    # Уведомляем всех остальных
+    all_ = cabbit_db.get_all()
+    for other_uid, other_cab in all_.items():
+        if other_uid in (attacker_uid, target_uid) or other_cab.get("dead"):
+            continue
+        try:
+            await ctx.application.bot.send_message(
+                chat_id=int(other_uid),
+                text=(
+                    f"💀 <b>Убийство!</b>\n\n"
+                    f"🔪 <b>{attacker_name}</b> использовал нож и убил <b>{target_name}</b>!\n"
+                    f"Нож сломался. Мир снова в безопасности... или нет? 👀"
+                ),
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.warning(f"kill broadcast uid={other_uid}: {e}")
 
     text = (
         f"🔪 <b>{target_name} убит!</b>\n\n"
