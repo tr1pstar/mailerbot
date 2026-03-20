@@ -14,7 +14,6 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ContextTypes, ConversationHandler, CommandHandler, MessageHandler, filters
 )
-import duel as duel_module
 
 logger = logging.getLogger(__name__)
 
@@ -295,7 +294,25 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if cabbit.get("duel_tokens", 0) <= 0:
             await q.answer("У тебя нет жетонов дуэли!", show_alert=True)
             return
-        await duel_module.show_duel_targets(q, uid, cabbit_db, _edit_card)
+        # Показываем цели для дуэли
+        all_   = cabbit_db.get_all()
+        others = [(u, c) for u, c in all_.items() if u != uid and not c.get("dead")]
+        if not others:
+            await q.answer("Нет других живых кеббитов!", show_alert=True)
+            return
+        buttons = [
+            [InlineKeyboardButton(
+                f"🐰 {c['name']} (ур. {c['level']}) — {c['xp']} XP",
+                callback_data=f"duel_send:{u}",
+            )]
+            for u, c in others
+        ]
+        buttons.append([InlineKeyboardButton("❌ Отмена", callback_data="duel_send:cancel")])
+        text = "🥊 <b>Выбери противника для дуэли</b>\n\nСтавка: <b>500 XP</b> | Best of 3"
+        try:
+            await q.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+        except Exception:
+            await q.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
         return
 
     if action == "box":
