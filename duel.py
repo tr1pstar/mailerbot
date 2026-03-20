@@ -7,7 +7,6 @@ from telegram.ext import ContextTypes
 
 logger = logging.getLogger(__name__)
 
-DUEL_XP = 500
 BEATS   = {"камень": "ножницы", "ножницы": "бумага", "бумага": "камень"}
 EMOJI   = {"камень": "✊", "ножницы": "✌️", "бумага": "🖐"}
 
@@ -56,17 +55,80 @@ async def show_duel_targets(q, uid: str, cabbit_db, edit_card_fn):
 
 
 async def callback_duel_send(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    from cabbit import cabbit_db, cabbit_status, _edit_card
+    """Шаг 1: выбрали противника → показываем выбор ставки."""
+    from cabbit import cabbit_db, _edit_card
     q          = update.callback_query
     await q.answer()
     challenger = str(q.from_user.id)
     target_uid = q.data.split(":")[1]
+
+    logger.info(f"duel_send: challenger={challenger} target={target_uid}")
 
     if target_uid == "cancel":
         cab = cabbit_db.get(challenger)
         if cab:
             await _edit_card(q, cab)
         return
+
+    c_cab = cabbit_db.get(challenger)
+    t_cab = cabbit_db.get(target_uid)
+
+    logger.info(f"duel_send: c_cab={bool(c_cab)} dead={c_cab.get('dead') if c_cab else 'N/A'} tokens={c_cab.get('duel_tokens',0) if c_cab else 'N/A'}")
+    logger.info(f"duel_send: t_cab={bool(t_cab)} dead={t_cab.get('dead') if t_cab else 'N/A'}")
+
+    if not c_cab or c_cab.get("dead"):
+        await q.answer("У тебя нет живого кеббита!", show_alert=True)
+        return
+    if not t_cab or t_cab.get("dead"):
+        await q.answer("Этот кеббит мёртв!", show_alert=True)
+        return
+    if c_cab.get("duel_tokens", 0) <= 0:
+        await q.answer("У тебя нет жетонов дуэли!", show_alert=True)
+        return
+
+    # Показываем выбор ставки
+    c_xp   = c_cab.get("xp", 0)
+    t_xp   = t_cab.get("xp", 0)
+    max_xp = min(c_xp, t_xp, 1000)
+
+    if c_xp < 1:
+        await q.answer("У тебя 0 XP — сначала покорми кеббита!", show_alert=True)
+        return
+    if t_xp < 1:
+        await q.answer("У противника 0 XP — дуэль невозможна!", show_alert=True)
+        return
+
+    stakes = [1, 10, 50, 100, 250, 500, 1000]
+    avail  = [s for s in stakes if s <= max_xp]
+    if not avail:
+        avail = [1]  # минимум всегда есть
+
+    buttons = [
+        [InlineKeyboardButton(f"⚡️ {s} XP", callback_data=f"duel_stake:{target_uid}:{s}")]
+        for s in avail
+    ]
+    buttons.append([InlineKeyboardButton("❌ Отмена", callback_data="duel_send:cancel")])
+
+    text = (
+        f"🥊 <b>Дуэль с {t_cab['name']}</b>\n\n"
+        f"Выбери ставку (макс. {max_xp} XP):\n"
+        f"<i>Победитель забирает ставку у проигравшего</i>"
+    )
+    try:
+        await q.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+    except Exception:
+        await q.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+
+
+async def callback_duel_stake(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Шаг 2: выбрали ставку → отправляем вызов."""
+    from cabbit import cabbit_db, cabbit_status, _edit_card
+    q          = update.callback_query
+    await q.answer()
+    challenger = str(q.from_user.id)
+    parts      = q.data.split(":")
+    target_uid = parts[1]
+    stake      = int(parts[2])
 
     c_cab = cabbit_db.get(challenger)
     t_cab = cabbit_db.get(target_uid)
@@ -80,11 +142,11 @@ async def callback_duel_send(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if c_cab.get("duel_tokens", 0) <= 0:
         await q.answer("У тебя нет жетонов дуэли!", show_alert=True)
         return
-    if c_cab.get("xp", 0) < DUEL_XP:
-        await q.answer(f"Нужно минимум {DUEL_XP} XP!", show_alert=True)
+    if c_cab.get("xp", 0) < stake:
+        await q.answer("Недостаточно XP для такой ставки!", show_alert=True)
         return
-    if t_cab.get("xp", 0) < DUEL_XP:
-        await q.answer("У противника недостаточно XP!", show_alert=True)
+    if t_cab.get("xp", 0) < stake:
+        await q.answer("У противника недостаточно XP для такой ставки!", show_alert=True)
         return
 
     # Списываем жетон
@@ -93,7 +155,7 @@ async def callback_duel_send(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     _duels[challenger] = {
         "target": target_uid,
-        "round":  1,
+        "stake":  stake,
         "scores": {challenger: 0, target_uid: 0},
         "moves":  {},
         "status": "pending",
@@ -105,7 +167,7 @@ async def callback_duel_send(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ]])
     invite = (
         f"🥊 <b>{c_cab['name']} вызывает тебя на дуэль!</b>\n\n"
-        f"Ставка: <b>{DUEL_XP} XP</b> | Best of 3\n"
+        f"Ставка: <b>{stake} XP</b>\n"
         f"Принять?"
     )
     try:
@@ -116,7 +178,7 @@ async def callback_duel_send(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.warning(f"duel invite: {e}")
 
-    confirm = f"✅ Вызов отправлен <b>{t_cab['name']}</b>!\n\n{cabbit_status(c_cab)}"
+    confirm = f"✅ Вызов отправлен <b>{t_cab['name']}</b>! Ставка: <b>{stake} XP</b>\n\n{cabbit_status(c_cab)}"
     await _edit_card(q, c_cab, confirm)
 
 
@@ -137,9 +199,10 @@ async def callback_duel_accept(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     c_cab = cabbit_db.get(challenger)
     t_cab = cabbit_db.get(target_uid)
+    stake = duel.get("stake", 100)
     text  = (
         f"⚔️ <b>{c_cab['name']} vs {t_cab['name']}</b>\n\n"
-        f"Ставка: <b>{DUEL_XP} XP</b> | Первый победивший забирает всё\n\n"
+        f"Ставка: <b>{stake} XP</b> | Первый победивший забирает всё\n\n"
         f"Выбери ход:"
     )
     kb = _move_kb(challenger)
@@ -264,6 +327,7 @@ async def _finish_duel(app, challenger: str, target_uid: str, duel: dict, last_t
     from cabbit import cabbit_db
     _duels.pop(challenger, None)
 
+    stake = duel.get("stake", 100)
     cs    = duel["scores"][challenger]
     ts    = duel["scores"][target_uid]
     c_cab = cabbit_db.get(challenger)
@@ -283,21 +347,19 @@ async def _finish_duel(app, challenger: str, target_uid: str, duel: dict, last_t
     if cs > ts:
         winner_uid, loser_uid = challenger, target_uid
         winner_cab, loser_cab = c_cab, t_cab
-        score_str = f"{cs}:{ts}"
     else:
         winner_uid, loser_uid = target_uid, challenger
         winner_cab, loser_cab = t_cab, c_cab
-        score_str = f"{ts}:{cs}"
 
-    winner_cab["xp"] = winner_cab.get("xp", 0) + DUEL_XP
-    loser_cab["xp"]  = max(0, loser_cab.get("xp", 0) - DUEL_XP)
+    winner_cab["xp"] = winner_cab.get("xp", 0) + stake
+    loser_cab["xp"]  = max(0, loser_cab.get("xp", 0) - stake)
     cabbit_db.save_cabbit(winner_uid, winner_cab)
     cabbit_db.save_cabbit(loser_uid, loser_cab)
 
     try:
         await app.bot.send_message(
             chat_id=int(winner_uid),
-            text=last_text + f"\n🏆 <b>{winner_cab['name']} победил {score_str}!</b>\n✨ +{DUEL_XP} XP",
+            text=last_text + f"\n🏆 <b>{winner_cab['name']} победил!</b>\n✨ +{stake} XP",
             parse_mode="HTML",
         )
     except Exception as e:
@@ -305,7 +367,7 @@ async def _finish_duel(app, challenger: str, target_uid: str, duel: dict, last_t
     try:
         await app.bot.send_message(
             chat_id=int(loser_uid),
-            text=last_text + f"\n💀 <b>{loser_cab['name']} проиграл {score_str}!</b>\n💔 -{DUEL_XP} XP",
+            text=last_text + f"\n💀 <b>{loser_cab['name']} проиграл!</b>\n💔 -{stake} XP",
             parse_mode="HTML",
         )
     except Exception as e:
