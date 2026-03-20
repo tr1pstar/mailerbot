@@ -193,6 +193,7 @@ async def callback_duel_stake(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     _set_duel(challenger, {
         "target": target_uid,
         "stake":  stake,
+        "round":  1,
         "scores": {challenger: 0, target_uid: 0},
         "moves":  {},
         "status": "pending",
@@ -320,7 +321,7 @@ async def _resolve_round(app, challenger: str, target_uid: str, duel: dict):
     from cabbit import cabbit_db
     c_move = duel["moves"][challenger]
     t_move = duel["moves"][target_uid]
-    round_ = duel["round"]
+    round_ = duel.get("round", 1)
     c_cab  = cabbit_db.get(challenger)
     t_cab  = cabbit_db.get(target_uid)
     c_name = c_cab["name"] if c_cab else "?"
