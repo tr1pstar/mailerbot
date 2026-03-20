@@ -155,7 +155,9 @@ def cabbit_status(cabbit: dict) -> str:
 
     counts   = cabbit.get("food_counts", {})
     food_str = " | ".join(f"{e} {counts.get(n,0)}" for n,e,_,_ in FOOD_TABLE)
-    knife_str = "\n🔪 <b>У тебя есть нож!</b> /knife чтобы использовать." if cabbit.get("has_knife") else ""
+    knife_str  = "\n🔪 <b>У тебя есть нож!</b> /knife чтобы использовать." if cabbit.get("has_knife") else ""
+    tokens     = cabbit.get("duel_tokens", 0)
+    token_str  = f"\n🥊 Жетонов дуэли: <b>{tokens}</b>" if tokens > 0 else ""
 
     return (
         f"🐰 <b>{name}</b>\n"
