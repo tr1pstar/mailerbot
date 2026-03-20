@@ -14,6 +14,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ContextTypes, ConversationHandler, CommandHandler, MessageHandler, filters
 )
+import duel as duel_module
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +165,8 @@ def cabbit_status(cabbit: dict) -> str:
         f"[{bar}] {pct}%\n\n"
         f"❤️ Здоровье:\n{hunger_bar(cabbit)}\n\n"
         f"🍽 Съедено: {food_str}"
-        f"{knife_str}\n\n"
+        f"{knife_str}"
+        f"{token_str}\n\n"
         f"{box_str}"
     )
 
@@ -178,6 +180,8 @@ def cabbit_keyboard(cabbit: dict) -> InlineKeyboardMarkup:
         buttons.append([InlineKeyboardButton("📦 Открыть коробку", callback_data="cabbit:box")])
     if cabbit.get("has_knife"):
         buttons.append([InlineKeyboardButton("🔪 Использовать нож", callback_data="cabbit:knife")])
+    if cabbit.get("duel_tokens", 0) > 0:
+        buttons.append([InlineKeyboardButton("🥊 Вызвать на дуэль", callback_data="cabbit:duel")])
     buttons.append([InlineKeyboardButton("🔄 Обновить", callback_data="cabbit:refresh")])
     return InlineKeyboardMarkup(buttons)
 
@@ -287,6 +291,13 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await _show_knife_targets(q, uid)
         return
 
+    if action == "duel":
+        if cabbit.get("duel_tokens", 0) <= 0:
+            await q.answer("У тебя нет жетонов дуэли!", show_alert=True)
+            return
+        await duel_module.show_duel_targets(q, uid, cabbit_db, _edit_card)
+        return
+
     if action == "box":
         now    = int(time.time())
         box_ts = cabbit.get("box_ts", 0)
@@ -322,9 +333,10 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         cabbit["last_fed"]      = now
         cabbit["warned_12h"]    = False
         cabbit["warned_23h"]    = False
+        cabbit["duel_tokens"]   = cabbit.get("duel_tokens", 0) + 1
         cabbit_db.save_cabbit(uid, cabbit)
 
-        text = f"📦 <b>Коробка открыта!</b>\n\nВыпало: {food_emoji} <b>{food_name}</b>\n✨ +{food_xp} XP\n"
+        text = f"📦 <b>Коробка открыта!</b>\n\nВыпало: {food_emoji} <b>{food_name}</b>\n✨ +{food_xp} XP\n🥊 +1 жетон дуэли\n"
         if leveled_up:
             text += f"\n🎉 <b>УРОВЕНЬ {new_level}!</b> Кеббит растёт!\n"
         text += f"\n{cabbit_status(cabbit)}"
