@@ -190,13 +190,13 @@ async def callback_duel_stake(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     c_cab["duel_tokens"] = c_cab.get("duel_tokens", 0) - 1
     cabbit_db.save_cabbit(challenger, c_cab)
 
-    _duels[challenger] = {
+    _set_duel(challenger, {
         "target": target_uid,
         "stake":  stake,
         "scores": {challenger: 0, target_uid: 0},
         "moves":  {},
         "status": "pending",
-    }
+    })
 
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Принять", callback_data=f"duel_accept:{challenger}"),
