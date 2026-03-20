@@ -10,8 +10,45 @@ logger = logging.getLogger(__name__)
 BEATS   = {"камень": "ножницы", "ножницы": "бумага", "бумага": "камень"}
 EMOJI   = {"камень": "✊", "ножницы": "✌️", "бумага": "🖐"}
 
-# Активные дуэли в памяти: {challenger_uid: {...}}
-_duels: dict = {}
+import os, json as _json
+from threading import Lock as _Lock
+
+_DUEL_FILE = "/app/data/duels.json"
+_duel_lock = _Lock()
+
+
+def _load_duels() -> dict:
+    if not os.path.exists(_DUEL_FILE):
+        return {}
+    try:
+        with open(_DUEL_FILE, "r", encoding="utf-8") as f:
+            return _json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_duels(data: dict) -> None:
+    with open(_DUEL_FILE, "w", encoding="utf-8") as f:
+        _json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _get_duel(challenger: str) -> dict | None:
+    return _load_duels().get(challenger)
+
+
+def _set_duel(challenger: str, duel: dict) -> None:
+    with _duel_lock:
+        data = _load_duels()
+        data[challenger] = duel
+        _save_duels(data)
+
+
+def _pop_duel(challenger: str) -> dict | None:
+    with _duel_lock:
+        data = _load_duels()
+        duel = data.pop(challenger, None)
+        _save_duels(data)
+    return duel
 
 
 def _move_kb(challenger_uid: str) -> InlineKeyboardMarkup:
@@ -189,13 +226,14 @@ async def callback_duel_accept(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     target_uid = str(q.from_user.id)
     challenger = q.data.split(":")[1]
 
-    duel = _duels.get(challenger)
+    duel = _get_duel(challenger)
     if not duel or duel["status"] != "pending" or duel["target"] != target_uid:
         await q.edit_message_text("❌ Дуэль недействительна.")
         return
 
     duel["status"] = "active"
     duel["moves"]  = {}
+    _set_duel(challenger, duel)
 
     c_cab = cabbit_db.get(challenger)
     t_cab = cabbit_db.get(target_uid)
@@ -226,7 +264,7 @@ async def callback_duel_decline(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     target_uid = str(q.from_user.id)
     challenger = q.data.split(":")[1]
 
-    _duels.pop(challenger, None)
+    _pop_duel(challenger)
     t_cab = cabbit_db.get(target_uid)
     name  = t_cab["name"] if t_cab else "Противник"
     await q.edit_message_text("❌ Ты отказался от дуэли.")
@@ -254,7 +292,7 @@ async def callback_duel_move(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     challenger = parts[1]
     move       = parts[2]
 
-    duel = _duels.get(challenger)
+    duel = _get_duel(challenger)
     if not duel or duel["status"] != "active":
         await q.answer("Дуэль уже завершена!", show_alert=True)
         return
@@ -268,6 +306,7 @@ async def callback_duel_move(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     duel["moves"][uid] = move
+    _set_duel(challenger, duel)
     await q.edit_message_text(
         f"✅ Ход: <b>{EMOJI.get(move,'')} {move}</b>\n\nОжидаем противника...",
         parse_mode="HTML",
@@ -290,6 +329,7 @@ async def _resolve_round(app, challenger: str, target_uid: str, duel: dict):
     if c_move == t_move:
         # Ничья — переигрываем
         duel["moves"] = {}
+        _set_duel(challenger, duel)
         tie_text = (
             f"⚔️ <b>Дуэль:</b>\n"
             f"🐰 {c_name}: {EMOJI.get(c_move,'')} {c_move}\n"
@@ -325,7 +365,7 @@ async def _resolve_round(app, challenger: str, target_uid: str, duel: dict):
 
 async def _finish_duel(app, challenger: str, target_uid: str, duel: dict, last_text: str):
     from cabbit import cabbit_db
-    _duels.pop(challenger, None)
+    _pop_duel(challenger)
 
     stake = duel.get("stake", 100)
     cs    = duel["scores"][challenger]
