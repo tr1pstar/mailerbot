@@ -31,6 +31,7 @@ from duel import (
     callback_duel_send, callback_duel_accept,
     callback_duel_decline, callback_duel_move,
 )
+from promo import cmd_promo, cmd_createpromo, cmd_listpromos, cmd_deletepromo
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -799,8 +800,12 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(callback_duel_accept,  pattern=r"^duel_accept:"))
     app.add_handler(CallbackQueryHandler(callback_duel_decline, pattern=r"^duel_decline:"))
     app.add_handler(CallbackQueryHandler(callback_duel_move,    pattern=r"^duel_move:"))
-    app.add_handler(CommandHandler("knife",       cmd_knife))
-    app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
+    app.add_handler(CommandHandler("knife",        cmd_knife))
+    app.add_handler(CommandHandler("leaderboard",  cmd_leaderboard))
+    app.add_handler(CommandHandler("promo",        cmd_promo))
+    app.add_handler(CommandHandler("createpromo",  cmd_createpromo))
+    app.add_handler(CommandHandler("listpromos",   cmd_listpromos))
+    app.add_handler(CommandHandler("deletepromo",  cmd_deletepromo))
 
     app.job_queue.run_once(lambda ctx: asyncio.create_task(restore_listeners(app)), when=2)
     app.job_queue.run_once(lambda ctx: asyncio.create_task(poll_zoho(app)), when=3)

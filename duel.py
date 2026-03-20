@@ -139,7 +139,7 @@ async def callback_duel_accept(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     t_cab = cabbit_db.get(target_uid)
     text  = (
         f"⚔️ <b>{c_cab['name']} vs {t_cab['name']}</b>\n\n"
-        f"🎯 Раунд 1 из 3 | Ставка: {DUEL_XP} XP\n\n"
+        f"Ставка: <b>{DUEL_XP} XP</b> | Первый победивший забирает всё\n\n"
         f"Выбери ход:"
     )
     kb = _move_kb(challenger)
@@ -225,40 +225,39 @@ async def _resolve_round(app, challenger: str, target_uid: str, duel: dict):
     t_name = t_cab["name"] if t_cab else "?"
 
     if c_move == t_move:
-        result = "🤝 Ничья в раунде!"
-    elif BEATS[c_move] == t_move:
+        # Ничья — переигрываем
+        duel["moves"] = {}
+        tie_text = (
+            f"⚔️ <b>Дуэль:</b>\n"
+            f"🐰 {c_name}: {EMOJI.get(c_move,'')} {c_move}\n"
+            f"🐰 {t_name}: {EMOJI.get(t_move,'')} {t_move}\n\n"
+            f"🤝 Ничья! Переигрываем — выбери ход:"
+        )
+        kb = _move_kb(challenger)
+        for uid in (challenger, target_uid):
+            try:
+                await app.bot.send_message(
+                    chat_id=int(uid), text=tie_text,
+                    parse_mode="HTML", reply_markup=kb,
+                )
+            except Exception as e:
+                logger.warning(f"tie notify {uid}: {e}")
+        return
+
+    # Есть победитель — сразу финиш
+    if BEATS[c_move] == t_move:
         duel["scores"][challenger] += 1
-        result = f"🏆 Раунд за <b>{c_name}</b>!"
     else:
         duel["scores"][target_uid] += 1
-        result = f"🏆 Раунд за <b>{t_name}</b>!"
 
     cs = duel["scores"][challenger]
     ts = duel["scores"][target_uid]
-    round_text = (
-        f"⚔️ Раунд {round_}:\n"
+    result_text = (
+        f"⚔️ <b>Дуэль завершена!</b>\n"
         f"🐰 {c_name}: {EMOJI.get(c_move,'')} {c_move}\n"
-        f"🐰 {t_name}: {EMOJI.get(t_move,'')} {t_move}\n\n"
-        f"{result}\n"
-        f"Счёт: <b>{cs} — {ts}</b>\n"
+        f"🐰 {t_name}: {EMOJI.get(t_move,'')} {t_move}\n"
     )
-
-    if cs >= 2 or ts >= 2 or round_ >= 3:
-        await _finish_duel(app, challenger, target_uid, duel, round_text)
-        return
-
-    duel["round"] += 1
-    duel["moves"]  = {}
-    next_text = round_text + f"\n🎯 Раунд {duel['round']} из 3 — выбери ход:"
-    kb = _move_kb(challenger)
-    for uid in (challenger, target_uid):
-        try:
-            await app.bot.send_message(
-                chat_id=int(uid), text=next_text,
-                parse_mode="HTML", reply_markup=kb,
-            )
-        except Exception as e:
-            logger.warning(f"round notify {uid}: {e}")
+    await _finish_duel(app, challenger, target_uid, duel, result_text)
 
 
 async def _finish_duel(app, challenger: str, target_uid: str, duel: dict, last_text: str):
