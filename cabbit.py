@@ -24,7 +24,7 @@ WARN_12H     = 12 * 3600
 WARN_23H     = 23 * 3600
 DEATH_24H    = 24 * 3600
 NAMING_STATE = 1
-KNIFE_CHANCE = 0.5          # 0.5% шанс выпадения ножа
+KNIFE_CHANCE = 0.5
 
 FOOD_TABLE = [
     ("Морковь",   "🥕", 60,  80),
@@ -32,8 +32,81 @@ FOOD_TABLE = [
     ("Вкусность", "✨", 20,  500),
 ]
 
+# Эволюции
+EVOLUTIONS = [
+    {"name": "Малыш",      "emoji": "🐣", "min_level": 1,  "xp_mult": 1.0, "box_cd": 30 * 60},
+    {"name": "Подросток",   "emoji": "🐰", "min_level": 5,  "xp_mult": 1.2, "box_cd": 30 * 60},
+    {"name": "Воин",        "emoji": "⚔️",  "min_level": 15, "xp_mult": 1.5, "box_cd": 30 * 60},
+    {"name": "Легенда",     "emoji": "👑", "min_level": 30, "xp_mult": 2.0, "box_cd": 30 * 60},
+]
+
+# Рандомные события при открытии коробки
+RANDOM_EVENTS = [
+    {"text": "🎁 Кеббит нашёл клад!",            "xp": 300,  "chance": 5},
+    {"text": "💫 Кеббит поскользнулся!",          "xp": -50,  "chance": 10},
+    {"text": "🐦 Подружился с птичкой!",           "tokens": 1, "chance": 8},
+    {"text": "🌀 Портал! Телепорт +1 уровень!",   "level_up": True, "chance": 2},
+    {"text": "💎 Нашёл алмаз!",                   "xp": 500,  "chance": 3},
+    {"text": "🌧 Дождь, кеббит грустит",          "xp": -30,  "chance": 8},
+    {"text": "🍀 Четырёхлистный клевер!",          "xp": 150,  "chance": 7},
+]
+
+# Предметы из коробок
+ITEM_TABLE = [
+    ("Щит",      "🛡", 3),
+    ("Зелье",    "🧪", 3),
+    ("Магнит",   "🧲", 2),
+    ("Корона",   "👑", 1.5),
+    ("Таблетка", "💊", 3),
+]
+
+SICKNESS_CHANCE   = 5
+SICKNESS_DURATION = 6 * 3600
+RAID_COOLDOWN     = 2 * 3600
+
+
 def xp_for_level(level: int) -> int:
     return int(100 * (level ** 1.6))
+
+
+def get_evolution(level: int) -> dict:
+    result = EVOLUTIONS[0]
+    for evo in EVOLUTIONS:
+        if level >= evo["min_level"]:
+            result = evo
+    return result
+
+
+def get_box_interval(cabbit: dict) -> int:
+    return get_evolution(cabbit.get("level", 1))["box_cd"]
+
+
+def roll_item() -> tuple[str, str] | None:
+    r = random.random() * 100
+    cum = 0
+    for name, emoji, chance in ITEM_TABLE:
+        cum += chance
+        if r < cum:
+            return name, emoji
+    return None
+
+
+def roll_event() -> dict | None:
+    for ev in RANDOM_EVENTS:
+        if random.random() * 100 < ev["chance"]:
+            return ev
+    return None
+
+
+def check_sickness(cabbit: dict) -> bool:
+    """Auto-cure if time passed. Returns True if still sick."""
+    if not cabbit.get("sick"):
+        return False
+    if int(time.time()) >= cabbit.get("sick_until", 0):
+        cabbit["sick"] = False
+        cabbit["sick_until"] = 0
+        return False
+    return True
 
 
 # ─── Хранилище ────────────────────────────────────────────────────────────────
@@ -72,6 +145,15 @@ class CabbitStorage:
             "dead": False,
             "has_knife": False,
             "food_counts": {"Морковь": 0, "Корм": 0, "Вкусность": 0},
+            "duel_tokens": 0,
+            "inventory": {},
+            "sick": False,
+            "sick_until": 0,
+            "crown_boxes": 0,
+            "last_raid": 0,
+            "achievements": [],
+            "stats": {},
+            "quests": {},
         }
         with self._lock:
             data = self._load()
@@ -89,7 +171,6 @@ class CabbitStorage:
         return self._load()
 
     def knife_owner(self) -> str | None:
-        """Возвращает uid владельца ножа или None."""
         for uid, c in self._load().items():
             if c.get("has_knife") and not c.get("dead"):
                 return uid
@@ -102,11 +183,7 @@ cabbit_db = CabbitStorage()
 # ─── Игровая логика ───────────────────────────────────────────────────────────
 
 def roll_box(uid: str) -> tuple[str, str, int, bool]:
-    """
-    Возвращает (food_name, emoji, xp, got_knife).
-    got_knife=True только если: выпал шанс И нож никем не занят.
-    """
-    # Проверяем нож
+    """Returns (food_name, emoji, xp, got_knife)."""
     knife_roll = random.random() * 100 < KNIFE_CHANCE
     if knife_roll and cabbit_db.knife_owner() is None:
         return "Нож", "🔪", 0, True
@@ -132,6 +209,11 @@ def hunger_bar(cabbit: dict) -> str:
     elif pct > 30: mood = "Немного голоден 😐"
     elif pct > 10: mood = "Очень голоден! 😨"
     else:          mood = "Умирает от голода! 💀"
+
+    if check_sickness(cabbit):
+        left = max(0, cabbit.get("sick_until", 0) - now)
+        mood += f"\n🤒 Болен! (осталось {left // 3600}ч {(left % 3600) // 60}м)"
+
     return f"{bar} {pct}%\n{mood}"
 
 
@@ -143,6 +225,8 @@ def cabbit_status(cabbit: dict) -> str:
     pct     = min(int(xp / needed * 100), 100)
     bar     = "█" * (pct // 10) + "░" * (10 - pct // 10)
 
+    evo = get_evolution(level)
+
     now       = int(time.time())
     box_ts    = cabbit.get("box_ts", 0)
     box_avail = cabbit.get("box_available", True) or now >= box_ts
@@ -151,23 +235,29 @@ def cabbit_status(cabbit: dict) -> str:
         box_str = "📦 Коробка готова!"
     else:
         left = max(0, box_ts - now)
-        box_str = f"⏳ Следующая коробка через {left//60}м {left%60}с"
+        box_str = f"⏳ Коробка через {left // 60}м {left % 60}с"
 
     counts   = cabbit.get("food_counts", {})
-    food_str = " | ".join(f"{e} {counts.get(n,0)}" for n,e,_,_ in FOOD_TABLE)
-    knife_str  = "\n🔪 <b>У тебя есть нож!</b> /knife чтобы использовать." if cabbit.get("has_knife") else ""
+    food_str = " | ".join(f"{e} {counts.get(n, 0)}" for n, e, _, _ in FOOD_TABLE)
+
+    inv = cabbit.get("inventory", {})
+    inv_items = [f"{e}{inv[n]}" for n, e, _ in ITEM_TABLE if inv.get(n, 0) > 0]
+    inv_str = " | ".join(inv_items) if inv_items else "пусто"
+
+    knife_str  = "\n🔪 <b>Есть нож!</b> /knife" if cabbit.get("has_knife") else ""
     tokens     = cabbit.get("duel_tokens", 0)
-    token_str  = f"\n🥊 Жетонов дуэли: <b>{tokens}</b>" if tokens > 0 else ""
+    token_str  = f"\n🥊 Жетонов: <b>{tokens}</b>" if tokens > 0 else ""
+    crown_str  = f"\n👑 Корона: x2 XP ещё <b>{cabbit.get('crown_boxes', 0)}</b> коробок" if cabbit.get("crown_boxes", 0) > 0 else ""
 
     return (
-        f"🐰 <b>{name}</b>\n"
+        f"{evo['emoji']} <b>{name}</b> [{evo['name']}]\n"
         f"⭐️ Уровень: <b>{level}</b>\n"
         f"📊 XP: <b>{xp}</b> / <b>{needed}</b>\n"
         f"[{bar}] {pct}%\n\n"
         f"❤️ Здоровье:\n{hunger_bar(cabbit)}\n\n"
-        f"🍽 Съедено: {food_str}"
-        f"{knife_str}"
-        f"{token_str}\n\n"
+        f"🍽 Еда: {food_str}\n"
+        f"🎒 Инвентарь: {inv_str}"
+        f"{knife_str}{token_str}{crown_str}\n\n"
         f"{box_str}"
     )
 
@@ -177,12 +267,30 @@ def cabbit_keyboard(cabbit: dict) -> InlineKeyboardMarkup:
     box_ts    = cabbit.get("box_ts", 0)
     box_avail = cabbit.get("box_available", True) or now >= box_ts
     buttons   = []
+
     if box_avail:
         buttons.append([InlineKeyboardButton("📦 Открыть коробку", callback_data="cabbit:box")])
+
+    inv = cabbit.get("inventory", {})
+    item_btns = []
+    if inv.get("Зелье", 0) > 0:
+        item_btns.append(InlineKeyboardButton(f"🧪{inv['Зелье']}", callback_data="use_item:Зелье"))
+    if inv.get("Таблетка", 0) > 0 and cabbit.get("sick"):
+        item_btns.append(InlineKeyboardButton(f"💊{inv['Таблетка']}", callback_data="use_item:Таблетка"))
+    if inv.get("Магнит", 0) > 0:
+        item_btns.append(InlineKeyboardButton(f"🧲{inv['Магнит']}", callback_data="use_item:Магнит"))
+    if item_btns:
+        buttons.append(item_btns)
+
     if cabbit.get("has_knife"):
-        buttons.append([InlineKeyboardButton("🔪 Использовать нож", callback_data="cabbit:knife")])
+        buttons.append([InlineKeyboardButton("🔪 Нож", callback_data="cabbit:knife")])
     if cabbit.get("duel_tokens", 0) > 0:
-        buttons.append([InlineKeyboardButton("🥊 Вызвать на дуэль", callback_data="cabbit:duel")])
+        buttons.append([InlineKeyboardButton("🥊 Дуэль", callback_data="cabbit:duel")])
+
+    last_raid = cabbit.get("last_raid", 0)
+    if now >= last_raid + RAID_COOLDOWN:
+        buttons.append([InlineKeyboardButton("🏴‍☠️ Рейд", callback_data="cabbit:raid")])
+
     buttons.append([InlineKeyboardButton("🔄 Обновить", callback_data="cabbit:refresh")])
     return InlineKeyboardMarkup(buttons)
 
@@ -194,6 +302,8 @@ def apply_xp(cabbit: dict, xp: int) -> tuple[bool, int]:
         cabbit["xp"] -= xp_for_level(cabbit["level"])
         cabbit["level"] += 1
         leveled_up = True
+    stats = cabbit.setdefault("stats", {})
+    stats["max_level"] = max(stats.get("max_level", 0), cabbit["level"])
     return leveled_up, cabbit["level"]
 
 
@@ -226,6 +336,8 @@ async def cmd_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             cabbit_db._save(data)
         return NAMING_STATE
 
+    check_sickness(cabbit)
+    cabbit_db.save_cabbit(uid, cabbit)
     await _send_cabbit_card(update.message, cabbit)
     return ConversationHandler.END
 
@@ -242,7 +354,8 @@ async def receive_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🎉 Познакомьтесь — <b>{name}</b>!\n\n"
         f"Каждые 30 минут появляется коробка с едой — не забывай кормить!\n"
-        f"⚠️ Если не кормить 24 часа — кеббит умрёт.",
+        f"⚠️ Если не кормить 24 часа — кеббит умрёт.\n\n"
+        f"Новые команды: /casino, /raid, /quests, /achievements",
         parse_mode="HTML",
     )
     await _send_cabbit_card(update.message, cabbit)
@@ -255,6 +368,7 @@ async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def _send_cabbit_card(msg, cabbit: dict):
+    check_sickness(cabbit)
     status = cabbit_status(cabbit)
     kb     = cabbit_keyboard(cabbit)
     if os.path.exists(CABBIT_PHOTO):
@@ -281,7 +395,10 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.answer("💀 Твой кеббит умер. Напиши /cabbit", show_alert=True)
         return
 
+    check_sickness(cabbit)
+
     if action == "refresh":
+        cabbit_db.save_cabbit(uid, cabbit)
         await _edit_card(q, cabbit)
         return
 
@@ -292,11 +409,19 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await _show_knife_targets(q, uid)
         return
 
+    if action == "raid":
+        now = int(time.time())
+        if now < cabbit.get("last_raid", 0) + RAID_COOLDOWN:
+            left = cabbit.get("last_raid", 0) + RAID_COOLDOWN - now
+            await q.answer(f"⏳ Рейд через {left // 60}м", show_alert=True)
+            return
+        await _do_raid(q, ctx, uid, cabbit)
+        return
+
     if action == "duel":
         if cabbit.get("duel_tokens", 0) <= 0:
             await q.answer("У тебя нет жетонов дуэли!", show_alert=True)
             return
-        # Показываем цели для дуэли
         all_   = cabbit_db.get_all()
         others = [(u, c) for u, c in all_.items() if u != uid and not c.get("dead")]
         if not others:
@@ -318,14 +443,29 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     if action == "box":
+        from quests import update_quest_progress
+        from achievements import check_achievements, unlock_achievements
+
         now    = int(time.time())
         box_ts = cabbit.get("box_ts", 0)
         if not (cabbit.get("box_available", True) or now >= box_ts):
             await q.answer("⏳ Коробка ещё не готова!", show_alert=True)
             return
 
-        food_name, food_emoji, food_xp, got_knife = roll_box(uid)
+        stats = cabbit.setdefault("stats", {})
+        stats["boxes_opened"] = stats.get("boxes_opened", 0) + 1
 
+        is_sick = check_sickness(cabbit)
+        evo     = get_evolution(cabbit.get("level", 1))
+        box_cd  = evo["box_cd"]
+
+        food_name, food_emoji, food_xp, got_knife = roll_box(uid)
+        item_drop = roll_item()
+        event     = roll_event()
+        actual_xp = 0
+
+
+       text_parts = ["📦 <b>Коробка открыта!</b>\n"]
         if got_knife:
             cabbit["has_knife"]     = True
             cabbit["box_available"] = False
@@ -361,25 +501,100 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     pass
             return
 
-        leveled_up, new_level = apply_xp(cabbit, food_xp)
-        counts = cabbit.setdefault("food_counts", {"Морковь": 0, "Корм": 0, "Вкусность": 0})
-        counts[food_name] = counts.get(food_name, 0) + 1
+        if got_knife:
+            cabbit["has_knife"] = True
+            text_parts.append("\n🔪 <b>ВАУ! Выпал НОЖ!</b>\nМожешь убить чужого кеббита!\n")
+        else:
+            xp_mult = evo["xp_mult"]
+            if cabbit.get("crown_boxes", 0) > 0:
+                xp_mult *= 2
+                cabbit["crown_boxes"] -= 1
+                text_parts.append("\n👑 Корона активна! x2 XP")
+            if is_sick:
+                xp_mult *= 0.5
+                text_parts.append("\n🤒 Болен — XP снижен вдвое")
+
+            actual_xp = int(food_xp * xp_mult)
+            leveled_up, new_level = apply_xp(cabbit, actual_xp)
+            counts = cabbit.setdefault("food_counts", {"Морковь": 0, "Корм": 0, "Вкусность": 0})
+            counts[food_name] = counts.get(food_name, 0) + 1
+            stats["xp_earned_total"] = stats.get("xp_earned_total", 0) + actual_xp
+
+            text_parts.append(f"\n{food_emoji} <b>{food_name}</b> — +{actual_xp} XP")
+            if xp_mult != 1.0:
+                text_parts.append(f" (x{xp_mult:.1f})")
+
+            if leveled_up:
+                new_evo = get_evolution(new_level)
+                text_parts.append(f"\n\n🎉 <b>УРОВЕНЬ {new_level}!</b>")
+                if new_evo != evo:
+                    text_parts.append(f"\n✨ <b>ЭВОЛЮЦИЯ: {new_evo['emoji']} {new_evo['name']}!</b>")
+
+        # Item drop
+        if item_drop:
+            item_name, item_emoji = item_drop
+            inv = cabbit.setdefault("inventory", {})
+            if item_name == "Корона":
+                cabbit["crown_boxes"] = cabbit.get("crown_boxes", 0) + 3
+                text_parts.append(f"\n\n🎁 {item_emoji} <b>{item_name}</b> — x2 XP на 3 коробки!")
+            else:
+                inv[item_name] = inv.get(item_name, 0) + 1
+                text_parts.append(f"\n\n🎁 Предмет: {item_emoji} <b>{item_name}</b>")
+
+        # Random event
+        if event:
+            text_parts.append(f"\n\n⚡️ {event['text']}")
+            if event.get("xp"):
+                cabbit["xp"] = max(0, cabbit.get("xp", 0) + event["xp"])
+                sign = "+" if event["xp"] > 0 else ""
+                text_parts.append(f"\n  {sign}{event['xp']} XP")
+                if event["xp"] > 0:
+                    stats["xp_earned_total"] = stats.get("xp_earned_total", 0) + event["xp"]
+            if event.get("tokens"):
+                cabbit["duel_tokens"] = cabbit.get("duel_tokens", 0) + event["tokens"]
+                text_parts.append(f"\n  +{event['tokens']} жетон дуэли")
+            if event.get("level_up"):
+                cabbit["level"] = cabbit.get("level", 1) + 1
+                cabbit["xp"] = 0
+                stats["max_level"] = max(stats.get("max_level", 0), cabbit["level"])
+                text_parts.append(f"\n  Новый уровень: {cabbit['level']}!")
+
+        # Sickness roll
+        if not cabbit.get("sick") and random.randint(1, 100) <= SICKNESS_CHANCE:
+            cabbit["sick"] = True
+            cabbit["sick_until"] = now + SICKNESS_DURATION
+            text_parts.append("\n\n🤒 <b>О нет! Кеббит заболел!</b> XP снижен. Найди 💊 или жди 6ч.")
+
+        # Common updates
         cabbit["box_available"] = False
-        cabbit["box_ts"]        = now + BOX_INTERVAL
+        cabbit["box_ts"]        = now + box_cd
         cabbit["last_fed"]      = now
         cabbit["warned_12h"]    = False
         cabbit["warned_23h"]    = False
         cabbit["duel_tokens"]   = cabbit.get("duel_tokens", 0) + 1
+
+        # Quest progress
+        update_quest_progress(cabbit, "open_boxes")
+        update_quest_progress(cabbit, "feed_cabbit")
+        if not got_knife:
+            update_quest_progress(cabbit, "earn_xp", actual_xp)
+
+        # Achievements
+        new_achs = check_achievements(cabbit)
+        if new_achs:
+            bonus = unlock_achievements(cabbit, new_achs)
+            cabbit["xp"] += bonus
+            for a in new_achs:
+                text_parts.append(f"\n\n🏅 <b>{a['emoji']} {a['name']}</b> (+{a['reward']} XP)")
+
         cabbit_db.save_cabbit(uid, cabbit)
 
-        text = f"📦 <b>Коробка открыта!</b>\n\nВыпало: {food_emoji} <b>{food_name}</b>\n✨ +{food_xp} XP\n🥊 +1 жетон дуэли\n"
-        if leveled_up:
-            text += f"\n🎉 <b>УРОВЕНЬ {new_level}!</b> Кеббит растёт!\n"
-        text += f"\n{cabbit_status(cabbit)}"
-        await _edit_card(q, cabbit, text)
+        text_parts.append(f"\n\n🥊 +1 жетон дуэли\n\n{cabbit_status(cabbit)}")
+        await _edit_card(q, cabbit, "".join(text_parts))
 
 
 async def _edit_card(q, cabbit: dict, text: str = None):
+    check_sickness(cabbit)
     status = text or cabbit_status(cabbit)
     kb     = cabbit_keyboard(cabbit)
     try:
@@ -448,15 +663,43 @@ async def callback_kill(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     target_name   = target["name"]
     attacker_name = attacker["name"]
 
-    # Убиваем
+    # Shield check
+    target_inv = target.get("inventory", {})
+    if target_inv.get("Щит", 0) > 0:
+        target_inv["Щит"] -= 1
+        attacker["has_knife"] = False
+        cabbit_db.save_cabbit(target_uid, target)
+        cabbit_db.save_cabbit(attacker_uid, attacker)
+        try:
+            await ctx.application.bot.send_message(
+                chat_id=int(target_uid),
+                text=(
+                    f"🛡 <b>Щит спас {target_name}!</b>\n\n"
+                    f"🔪 {attacker_name} пытался убить, но щит заблокировал удар!\n"
+                    f"Щит сломался, нож тоже."
+                ),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+        text = (
+            f"🛡 <b>Удар заблокирован!</b>\n\n"
+            f"{target_name} использовал щит. Нож сломался.\n\n"
+            f"{cabbit_status(attacker)}"
+        )
+        await _edit_card(q, attacker, text)
+        return
+
+    # Kill
     target["dead"] = True
     cabbit_db.save_cabbit(target_uid, target)
 
-    # Забираем нож
     attacker["has_knife"] = False
+    a_stats = attacker.setdefault("stats", {})
+    a_stats["kills"] = a_stats.get("kills", 0) + 1
     cabbit_db.save_cabbit(attacker_uid, attacker)
 
-    # Уведомляем жертву
     try:
         await ctx.application.bot.send_message(
             chat_id=int(target_uid),
@@ -470,6 +713,15 @@ async def callback_kill(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.warning(f"kill notify target={target_uid}: {e}")
 
+    from achievements import check_achievements, unlock_achievements
+    new_achs = check_achievements(attacker)
+    ach_text = ""
+    if new_achs:
+        bonus = unlock_achievements(attacker, new_achs)
+        attacker["xp"] += bonus
+        cabbit_db.save_cabbit(attacker_uid, attacker)
+        for a in new_achs:
+            ach_text += f"\n🏅 <b>{a['emoji']} {a['name']}</b> (+{a['reward']} XP)"
     # Уведомляем всех остальных
     all_ = cabbit_db.get_all()
     for other_uid, other_cab in all_.items():
@@ -490,10 +742,167 @@ async def callback_kill(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     text = (
         f"🔪 <b>{target_name} убит!</b>\n\n"
-        f"Нож сломался после использования.\n\n"
+        f"Нож сломался.{ach_text}\n\n"
         f"{cabbit_status(attacker)}"
     )
     await _edit_card(q, attacker, text)
+
+
+# ─── Рейд ─────────────────────────────────────────────────────────────────────
+
+async def _do_raid(q, ctx, uid: str, cabbit: dict):
+    from quests import update_quest_progress
+    from achievements import check_achievements, unlock_achievements
+
+    all_   = cabbit_db.get_all()
+    others = [(u, c) for u, c in all_.items() if u != uid and not c.get("dead") and c.get("xp", 0) > 0]
+    if not others:
+        await q.answer("Нет целей для рейда!", show_alert=True)
+        return
+
+    target_uid, target_cab = random.choice(others)
+    cabbit["last_raid"] = int(time.time())
+    stats = cabbit.setdefault("stats", {})
+    update_quest_progress(cabbit, "do_raid")
+
+    if random.randint(1, 100) <= 40:
+        stolen = max(1, int(target_cab.get("xp", 0) * 0.1))
+        stolen = min(stolen, 500)
+        target_cab["xp"] = max(0, target_cab.get("xp", 0) - stolen)
+        cabbit["xp"] = cabbit.get("xp", 0) + stolen
+        stats["raids_ok"] = stats.get("raids_ok", 0) + 1
+        stats["xp_earned_total"] = stats.get("xp_earned_total", 0) + stolen
+        cabbit_db.save_cabbit(target_uid, target_cab)
+
+        try:
+            await ctx.application.bot.send_message(
+                chat_id=int(target_uid),
+                text=(
+                    f"🏴‍☠️ <b>Рейд!</b>\n\n"
+                    f"{cabbit['name']} украл <b>{stolen} XP</b> у {target_cab['name']}!"
+                ),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+        text = (
+            f"🏴‍☠️ <b>Рейд успешен!</b>\n\n"
+            f"Украл <b>{stolen} XP</b> у {target_cab['name']}!\n"
+        )
+    else:
+        lost = max(1, int(cabbit.get("xp", 0) * 0.05))
+        cabbit["xp"] = max(0, cabbit.get("xp", 0) - lost)
+        stats["raids_fail"] = stats.get("raids_fail", 0) + 1
+        text = (
+            f"🏴‍☠️ <b>Рейд провалился!</b>\n\n"
+            f"Попался при попытке ограбить {target_cab['name']}.\n"
+            f"💸 -{lost} XP\n"
+        )
+
+    new_achs = check_achievements(cabbit)
+    if new_achs:
+        bonus = unlock_achievements(cabbit, new_achs)
+        cabbit["xp"] += bonus
+        for a in new_achs:
+            text += f"\n🏅 <b>{a['emoji']} {a['name']}</b> (+{a['reward']} XP)"
+
+    cabbit_db.save_cabbit(uid, cabbit)
+    text += f"\n\n{cabbit_status(cabbit)}"
+    await _edit_card(q, cabbit, text)
+
+
+async def cmd_raid(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid    = str(update.effective_user.id)
+    cabbit = cabbit_db.get(uid)
+    if not cabbit or cabbit.get("dead"):
+        await update.message.reply_text("❌ Сначала создай кеббита через /cabbit")
+        return
+
+    now = int(time.time())
+    if now < cabbit.get("last_raid", 0) + RAID_COOLDOWN:
+        left = cabbit.get("last_raid", 0) + RAID_COOLDOWN - now
+        await update.message.reply_text(f"⏳ Рейд доступен через {left // 60}м {left % 60}с")
+        return
+
+    await update.message.reply_text(
+        "🏴‍☠️ <b>Рейд</b>\n\n"
+        "40% — украсть 10% XP случайного игрока (макс 500)\n"
+        "60% — потеряешь 5% своего XP\n"
+        "Кулдаун: 2 часа\n\n"
+        "Жми кнопку в /cabbit чтобы начать!",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🏴‍☠️ Начать рейд", callback_data="cabbit:raid")
+        ]]),
+    )
+
+
+# ─── Использование предметов ──────────────────────────────────────────────────
+
+async def callback_use_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q    = update.callback_query
+    await q.answer()
+    uid  = str(q.from_user.id)
+    item = q.data.split(":")[1]
+
+    cabbit = cabbit_db.get(uid)
+    if not cabbit or cabbit.get("dead"):
+        await q.answer("❌ Кеббит не найден.", show_alert=True)
+        return
+
+    inv = cabbit.get("inventory", {})
+    if inv.get(item, 0) <= 0:
+        await q.answer("У тебя нет этого предмета!", show_alert=True)
+        return
+
+    inv[item] -= 1
+    text = ""
+
+    if item == "Зелье":
+        cabbit["last_fed"] = int(time.time())
+        cabbit["warned_12h"] = False
+        cabbit["warned_23h"] = False
+        text = f"🧪 <b>Зелье использовано!</b>\n\nГолод сброшен!\n\n{cabbit_status(cabbit)}"
+
+    elif item == "Таблетка":
+        cabbit["sick"] = False
+        cabbit["sick_until"] = 0
+        text = f"💊 <b>Таблетка!</b>\n\nКеббит здоров!\n\n{cabbit_status(cabbit)}"
+
+    elif item == "Магнит":
+        all_   = cabbit_db.get_all()
+        others = [(u, c) for u, c in all_.items() if u != uid and not c.get("dead") and c.get("xp", 0) > 0]
+        if not others:
+            inv[item] += 1
+            await q.answer("Нет целей!", show_alert=True)
+            cabbit_db.save_cabbit(uid, cabbit)
+            return
+
+        t_uid, t_cab = random.choice(others)
+        stolen = random.randint(100, 300)
+        stolen = min(stolen, t_cab.get("xp", 0))
+        t_cab["xp"] = max(0, t_cab.get("xp", 0) - stolen)
+        cabbit["xp"] = cabbit.get("xp", 0) + stolen
+        cabbit_db.save_cabbit(t_uid, t_cab)
+
+        try:
+            await ctx.application.bot.send_message(
+                chat_id=int(t_uid),
+                text=f"🧲 <b>Магнит!</b> {cabbit['name']} украл <b>{stolen} XP</b>!",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+        text = (
+            f"🧲 <b>Магнит!</b>\n\n"
+            f"Украл <b>{stolen} XP</b> у {t_cab['name']}!\n\n"
+            f"{cabbit_status(cabbit)}"
+        )
+
+    cabbit_db.save_cabbit(uid, cabbit)
+    await _edit_card(q, cabbit, text)
 
 
 async def cmd_knife(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -537,9 +946,11 @@ async def cmd_leaderboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     for i, (uid, c) in enumerate(alive[:10], 1):
         medal = medals[i-1] if i <= 3 else f"{i}."
         knife = " 🔪" if c.get("has_knife") else ""
+        evo   = get_evolution(c["level"])
+        achs  = len(c.get("achievements", []))
         lines.append(
-            f"{medal} <b>{c['name']}</b> — ур. {c['level']} "
-            f"({c['xp']} XP){knife}"
+            f"{medal} {evo['emoji']} <b>{c['name']}</b> — ур. {c['level']} "
+            f"({c['xp']} XP){knife} 🏅{achs}"
         )
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
@@ -562,7 +973,6 @@ async def box_notifier(app) -> None:
                 last_fed = cabbit.get("last_fed", now)
                 elapsed  = now - last_fed
 
-                # Смерть 24ч
                 if elapsed >= DEATH_24H:
                     cabbit["dead"] = True
                     cabbit_db.save_cabbit(uid, cabbit)
@@ -580,7 +990,6 @@ async def box_notifier(app) -> None:
                         logger.warning(f"death notify uid={uid}: {e}")
                     continue
 
-                # Критическое 23ч
                 if elapsed >= WARN_23H and not cabbit.get("warned_23h"):
                     cabbit["warned_23h"] = True
                     cabbit_db.save_cabbit(uid, cabbit)
@@ -591,7 +1000,7 @@ async def box_notifier(app) -> None:
                             text=(
                                 f"☠️ <b>СРОЧНО! {name} умирает!</b>\n\n"
                                 f"Кеббит не ел уже 23 часа!\n"
-                                f"Осталось <b>{mins_left} минут</b> — потом он умрёт навсегда!\n\n"
+                                f"Осталось <b>{mins_left} минут</b>!\n\n"
                                 f"Скорее /cabbit!"
                             ),
                             parse_mode="HTML",
@@ -600,7 +1009,6 @@ async def box_notifier(app) -> None:
                         logger.warning(f"warn_23h uid={uid}: {e}")
                     continue
 
-                # Предупреждение 12ч
                 if elapsed >= WARN_12H and not cabbit.get("warned_12h"):
                     cabbit["warned_12h"] = True
                     cabbit_db.save_cabbit(uid, cabbit)
@@ -610,7 +1018,7 @@ async def box_notifier(app) -> None:
                             text=(
                                 f"⚠️ <b>{name} голодает!</b>\n\n"
                                 f"Кеббит не ел уже 12 часов.\n"
-                                f"Покорми его или он умрёт через 12 часов!\n\n"
+                                f"Покорми или он умрёт через 12 часов!\n\n"
                                 f"/cabbit → 📦 Открыть коробку"
                             ),
                             parse_mode="HTML",
@@ -618,7 +1026,6 @@ async def box_notifier(app) -> None:
                     except Exception as e:
                         logger.warning(f"warn_12h uid={uid}: {e}")
 
-                # Коробка готова — беззвучно
                 box_ts    = cabbit.get("box_ts", 0)
                 box_avail = cabbit.get("box_available", True)
                 if not box_avail and now >= box_ts:
@@ -633,7 +1040,7 @@ async def box_notifier(app) -> None:
                                 f"/cabbit чтобы открыть."
                             ),
                             parse_mode="HTML",
-                            disable_notification=True,   # беззвучно
+                            disable_notification=True,
                         )
                     except Exception as e:
                         logger.warning(f"box notify uid={uid}: {e}")
