@@ -64,7 +64,8 @@ async def cmd_casino(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if mult > 0:
         winnings = int(bet * mult)
         net = winnings - bet
-        cabbit["xp"] = cabbit.get("xp", 0) + net
+        from cabbit import apply_xp
+        leveled_up, new_level = apply_xp(cabbit, net)
         stats["casino_wins"] = stats.get("casino_wins", 0) + 1
         stats["xp_earned_total"] = stats.get("xp_earned_total", 0) + net
         text = (
@@ -73,6 +74,8 @@ async def cmd_casino(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"🎉 <b>ВЫИГРЫШ x{mult:.0f}!</b>\n"
             f"💰 +{net} XP\n"
         )
+        if leveled_up:
+            text += f"🎉 <b>УРОВЕНЬ {new_level}!</b>\n"
     else:
         cabbit["xp"] = max(0, cabbit.get("xp", 0) - bet)
         stats["casino_losses"] = stats.get("casino_losses", 0) + 1
