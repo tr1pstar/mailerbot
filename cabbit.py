@@ -464,25 +464,12 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         event     = roll_event()
         actual_xp = 0
 
+        text_parts = ["📦 <b>Коробка открыта!</b>\n"]
 
-       text_parts = ["📦 <b>Коробка открыта!</b>\n"]
         if got_knife:
-            cabbit["has_knife"]     = True
-            cabbit["box_available"] = False
-            cabbit["box_ts"]        = now + BOX_INTERVAL
-            cabbit["last_fed"]      = now
-            cabbit["warned_12h"]    = False
-            cabbit["warned_23h"]    = False
-            cabbit_db.save_cabbit(uid, cabbit)
-            text = (
-                f"📦 <b>Коробка открыта!</b>\n\n"
-                f"🔪 <b>ВАУ! Выпал НОЖ!</b>\n"
-                f"Ты можешь убить чужого кеббита!\n"
-                f"Нажми кнопку ниже или напиши /knife\n\n"
-                f"{cabbit_status(cabbit)}"
-            )
-            await _edit_card(q, cabbit, text)
-            # Уведомляем всех остальных пользователей
+            cabbit["has_knife"] = True
+            text_parts.append("\n🔪 <b>ВАУ! Выпал НОЖ!</b>\nМожешь убить чужого кеббита!\n")
+            # Уведомляем всех остальных
             all_ = cabbit_db.get_all()
             for other_uid, other_cab in all_.items():
                 if other_uid == uid or other_cab.get("dead"):
@@ -499,11 +486,6 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     )
                 except Exception:
                     pass
-            return
-
-        if got_knife:
-            cabbit["has_knife"] = True
-            text_parts.append("\n🔪 <b>ВАУ! Выпал НОЖ!</b>\nМожешь убить чужого кеббита!\n")
         else:
             xp_mult = evo["xp_mult"]
             if cabbit.get("crown_boxes", 0) > 0:
@@ -722,6 +704,7 @@ async def callback_kill(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         cabbit_db.save_cabbit(attacker_uid, attacker)
         for a in new_achs:
             ach_text += f"\n🏅 <b>{a['emoji']} {a['name']}</b> (+{a['reward']} XP)"
+
     # Уведомляем всех остальных
     all_ = cabbit_db.get_all()
     for other_uid, other_cab in all_.items():
