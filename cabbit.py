@@ -566,8 +566,11 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if new_achs:
             bonus = unlock_achievements(cabbit, new_achs)
             cabbit["xp"] += bonus
+            text_parts.append(f"\n\n{'━' * 20}")
+            text_parts.append("\n🏆 <b>ДОСТИЖЕНИЕ РАЗБЛОКИРОВАНО!</b>")
             for a in new_achs:
-                text_parts.append(f"\n\n🏅 <b>{a['emoji']} {a['name']}</b> (+{a['reward']} XP)")
+                text_parts.append(f"\n  {a['emoji']} <b>{a['name']}</b> — {a['desc']}\n  💰 +{a['reward']} XP")
+            text_parts.append(f"\n{'━' * 20}")
 
         cabbit_db.save_cabbit(uid, cabbit)
 
@@ -702,8 +705,10 @@ async def callback_kill(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         bonus = unlock_achievements(attacker, new_achs)
         attacker["xp"] += bonus
         cabbit_db.save_cabbit(attacker_uid, attacker)
+        ach_text = f"\n\n{'━' * 20}\n🏆 <b>ДОСТИЖЕНИЕ РАЗБЛОКИРОВАНО!</b>"
         for a in new_achs:
-            ach_text += f"\n🏅 <b>{a['emoji']} {a['name']}</b> (+{a['reward']} XP)"
+            ach_text += f"\n  {a['emoji']} <b>{a['name']}</b> — {a['desc']}\n  💰 +{a['reward']} XP"
+        ach_text += f"\n{'━' * 20}"
 
     # Уведомляем всех остальных
     all_ = cabbit_db.get_all()
@@ -787,8 +792,10 @@ async def _do_raid(q, ctx, uid: str, cabbit: dict):
     if new_achs:
         bonus = unlock_achievements(cabbit, new_achs)
         cabbit["xp"] += bonus
+        text += f"\n\n{'━' * 20}\n🏆 <b>ДОСТИЖЕНИЕ РАЗБЛОКИРОВАНО!</b>"
         for a in new_achs:
-            text += f"\n🏅 <b>{a['emoji']} {a['name']}</b> (+{a['reward']} XP)"
+            text += f"\n  {a['emoji']} <b>{a['name']}</b> — {a['desc']}\n  💰 +{a['reward']} XP"
+        text += f"\n{'━' * 20}"
 
     cabbit_db.save_cabbit(uid, cabbit)
     text += f"\n\n{cabbit_status(cabbit)}"
