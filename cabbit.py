@@ -32,6 +32,13 @@ FOOD_TABLE = [
     ("Вкусность", "✨", 20,  500),
 ]
 
+# Сколько часов здоровья восстанавливает каждая еда
+FOOD_HEAL = {
+    "Морковь":   3 * 3600,
+    "Корм":      6 * 3600,
+    "Вкусность": 12 * 3600,
+}
+
 # Эволюции
 EVOLUTIONS = [
     {"name": "Малыш",      "emoji": "🐣", "min_level": 1,  "xp_mult": 1.0, "box_cd": 30 * 60},
@@ -550,9 +557,14 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # Common updates
         cabbit["box_available"] = False
         cabbit["box_ts"]        = now + box_cd
-        cabbit["last_fed"]      = now
-        cabbit["warned_12h"]    = False
-        cabbit["warned_23h"]    = False
+        if not got_knife:
+            heal = FOOD_HEAL.get(food_name, 3 * 3600)
+            cabbit["last_fed"] = min(now, cabbit.get("last_fed", now) + heal)
+        elapsed_after = now - cabbit.get("last_fed", now)
+        if elapsed_after < WARN_12H:
+            cabbit["warned_12h"] = False
+        if elapsed_after < WARN_23H:
+            cabbit["warned_23h"] = False
         cabbit["duel_tokens"]   = cabbit.get("duel_tokens", 0) + 1
 
         # Quest progress
