@@ -24,7 +24,8 @@ from config import BOT_TOKEN, ZOHO_EMAIL, ZOHO_PASSWORD, ZOHO_DOMAIN, ZOHO_IMAP_
 from storage import Storage
 from cabbit import (
     cmd_cabbit, receive_name, cancel, callback_cabbit,
-    callback_kill, cmd_knife, cmd_leaderboard,
+    callback_kill, cmd_knife, cmd_leaderboard, cmd_raid,
+    callback_use_item,
     box_notifier, NAMING_STATE, cabbit_db,
 )
 from duel import (
@@ -32,6 +33,9 @@ from duel import (
     callback_duel_accept, callback_duel_decline, callback_duel_move,
 )
 from promo import cmd_promo, cmd_createpromo, cmd_listpromos, cmd_deletepromo
+from casino import cmd_casino
+from quests import cmd_quests, callback_quest_claim
+from achievements import cmd_achievements
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -384,14 +388,19 @@ async def restore_listeners(app: Application) -> None:
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "👋 <b>MailBot</b>\n\n"
-        "Два типа почт:\n"
-        "  📦 <b>mail.tm</b> — временные, бесплатные\n"
-        f"  🌐 <b>@{ZOHO_DOMAIN}</b> — твой домен\n\n"
-        "Команды:\n"
-        "  /new [username] — создать почту (выбор домена)\n"
-        "  /list — все твои почты\n"
+        "📬 <b>Почта:</b>\n"
+        "  /new — создать почту\n"
+        "  /list — все почты\n"
         "  /inbox — читать письма\n"
-        "  /remove — удалить почту\n",
+        "  /remove — удалить почту\n\n"
+        "🐰 <b>Кеббит:</b>\n"
+        "  /cabbit — твой питомец\n"
+        "  /casino СТАВКА — слот-машина\n"
+        "  /raid — украсть XP\n"
+        "  /quests — ежедневные квесты\n"
+        "  /achievements — достижения\n"
+        "  /leaderboard — топ игроков\n"
+        "  /knife — использовать нож\n",
         parse_mode="HTML",
     )
 
@@ -803,10 +812,16 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(callback_duel_move,    pattern=r"^duel_move:"))
     app.add_handler(CommandHandler("knife",        cmd_knife))
     app.add_handler(CommandHandler("leaderboard",  cmd_leaderboard))
+    app.add_handler(CommandHandler("casino",       cmd_casino))
+    app.add_handler(CommandHandler("quests",       cmd_quests))
+    app.add_handler(CommandHandler("achievements", cmd_achievements))
+    app.add_handler(CommandHandler("raid",         cmd_raid))
     app.add_handler(CommandHandler("promo",        cmd_promo))
     app.add_handler(CommandHandler("createpromo",  cmd_createpromo))
     app.add_handler(CommandHandler("listpromos",   cmd_listpromos))
     app.add_handler(CommandHandler("deletepromo",  cmd_deletepromo))
+    app.add_handler(CallbackQueryHandler(callback_use_item,    pattern=r"^use_item:"))
+    app.add_handler(CallbackQueryHandler(callback_quest_claim, pattern=r"^quest_claim:"))
 
     app.job_queue.run_once(lambda ctx: asyncio.create_task(restore_listeners(app)), when=2)
     app.job_queue.run_once(lambda ctx: asyncio.create_task(poll_zoho(app)), when=3)

@@ -394,13 +394,35 @@ async def _finish_duel(app, challenger: str, target_uid: str, duel: dict, last_t
 
     winner_cab["xp"] = winner_cab.get("xp", 0) + stake
     loser_cab["xp"]  = max(0, loser_cab.get("xp", 0) - stake)
+
+    # Stats
+    w_stats = winner_cab.setdefault("stats", {})
+    l_stats = loser_cab.setdefault("stats", {})
+    w_stats["duels_won"]      = w_stats.get("duels_won", 0) + 1
+    w_stats["xp_earned_total"] = w_stats.get("xp_earned_total", 0) + stake
+    l_stats["duels_lost"]     = l_stats.get("duels_lost", 0) + 1
+
+    # Quest progress
+    from quests import update_quest_progress
+    update_quest_progress(winner_cab, "win_duel")
+
+    # Achievements
+    from achievements import check_achievements, unlock_achievements
+    ach_text_w = ""
+    new_achs = check_achievements(winner_cab)
+    if new_achs:
+        bonus = unlock_achievements(winner_cab, new_achs)
+        winner_cab["xp"] += bonus
+        for a in new_achs:
+            ach_text_w += f"\n🏅 <b>{a['emoji']} {a['name']}</b> (+{a['reward']} XP)"
+
     cabbit_db.save_cabbit(winner_uid, winner_cab)
     cabbit_db.save_cabbit(loser_uid, loser_cab)
 
     try:
         await app.bot.send_message(
             chat_id=int(winner_uid),
-            text=last_text + f"\n🏆 <b>{winner_cab['name']} победил!</b>\n✨ +{stake} XP",
+            text=last_text + f"\n🏆 <b>{winner_cab['name']} победил!</b>\n✨ +{stake} XP{ach_text_w}",
             parse_mode="HTML",
         )
     except Exception as e:

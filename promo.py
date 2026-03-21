@@ -149,6 +149,19 @@ async def cmd_promo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         leveled_up, new_level = apply_xp(cabbit, food_xp)
         counts = cabbit.setdefault("food_counts", {"Морковь": 0, "Корм": 0, "Вкусность": 0})
         counts[food_name] = counts.get(food_name, 0) + 1
+
+        stats = cabbit.setdefault("stats", {})
+        stats["xp_earned_total"] = stats.get("xp_earned_total", 0) + food_xp
+
+        from achievements import check_achievements, unlock_achievements
+        new_achs = check_achievements(cabbit)
+        ach_text = ""
+        if new_achs:
+            bonus = unlock_achievements(cabbit, new_achs)
+            cabbit["xp"] += bonus
+            for a in new_achs:
+                ach_text += f"\n🏅 <b>{a['emoji']} {a['name']}</b> (+{a['reward']} XP)"
+
         cabbit_db.save_cabbit(uid, cabbit)
 
         text = (
@@ -157,7 +170,7 @@ async def cmd_promo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         if leveled_up:
             text += f"🎉 <b>УРОВЕНЬ {new_level}!</b>\n"
-        text += f"\n{cabbit_status(cabbit)}"
+        text += f"{ach_text}\n{cabbit_status(cabbit)}"
         await update.message.reply_text(text, parse_mode="HTML")
 
 
