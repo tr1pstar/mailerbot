@@ -123,8 +123,10 @@ async def callback_quest_claim(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if new_achs:
         bonus = unlock_achievements(cabbit, new_achs)
         cabbit["xp"] += bonus
+        ach_text = f"\n\n{'━' * 20}\n🏆 <b>ДОСТИЖЕНИЕ РАЗБЛОКИРОВАНО!</b>"
         for a in new_achs:
-            ach_text += f"\n🏅 <b>{a['emoji']} {a['name']}</b> (+{a['reward']} XP)"
+            ach_text += f"\n  {a['emoji']} <b>{a['name']}</b> — {a['desc']}\n  💰 +{a['reward']} XP"
+        ach_text += f"\n{'━' * 20}"
 
     cabbit_db.save_cabbit(uid, cabbit)
     text = f"✅ Квест выполнен!\n\n+{reward} XP{ach_text}\n\n💰 Баланс: <b>{cabbit.get('xp', 0)} XP</b>"

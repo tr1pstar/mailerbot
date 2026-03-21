@@ -413,8 +413,10 @@ async def _finish_duel(app, challenger: str, target_uid: str, duel: dict, last_t
     if new_achs:
         bonus = unlock_achievements(winner_cab, new_achs)
         winner_cab["xp"] += bonus
+        ach_text_w = f"\n\n{'━' * 20}\n🏆 <b>ДОСТИЖЕНИЕ РАЗБЛОКИРОВАНО!</b>"
         for a in new_achs:
-            ach_text_w += f"\n🏅 <b>{a['emoji']} {a['name']}</b> (+{a['reward']} XP)"
+            ach_text_w += f"\n  {a['emoji']} <b>{a['name']}</b> — {a['desc']}\n  💰 +{a['reward']} XP"
+        ach_text_w += f"\n{'━' * 20}"
 
     cabbit_db.save_cabbit(winner_uid, winner_cab)
     cabbit_db.save_cabbit(loser_uid, loser_cab)
