@@ -32,6 +32,13 @@ FOOD_TABLE = [
     ("Вкусность", "✨", 20,  500),
 ]
 
+# Сколько часов здоровья восстанавливает каждая еда
+FOOD_HEAL = {
+    "Морковь":   3 * 3600,
+    "Корм":      6 * 3600,
+    "Вкусность": 12 * 3600,
+}
+
 # Эволюции
 EVOLUTIONS = [
     {"name": "Малыш",      "emoji": "🐣", "min_level": 1,  "xp_mult": 1.0, "box_cd": 30 * 60},
@@ -53,9 +60,9 @@ RANDOM_EVENTS = [
 
 # Предметы из коробок
 ITEM_TABLE = [
-    ("Щит",      "🛡", 3),
-    ("Зелье",    "🧪", 3),
-    ("Магнит",   "🧲", 2),
+    ("Щит",      "🛡", 0.5),
+    ("Зелье",    "🧪", 2),
+    ("Магнит",   "🧲", 1.5),
     ("Корона",   "👑", 1.5),
     ("Таблетка", "💊", 3),
 ]
@@ -154,6 +161,7 @@ class CabbitStorage:
             "achievements": [],
             "stats": {},
             "quests": {},
+            "prestige_stars": 0,
         }
         with self._lock:
             data = self._load()
@@ -249,9 +257,12 @@ def cabbit_status(cabbit: dict) -> str:
     token_str  = f"\n🥊 Жетонов: <b>{tokens}</b>" if tokens > 0 else ""
     crown_str  = f"\n👑 Корона: x2 XP ещё <b>{cabbit.get('crown_boxes', 0)}</b> коробок" if cabbit.get("crown_boxes", 0) > 0 else ""
 
+    stars = cabbit.get("prestige_stars", 0)
+    stars_str = f" {'⭐' * stars}" if stars > 0 else ""
+
     return (
-        f"{evo['emoji']} <b>{name}</b> [{evo['name']}]\n"
-        f"⭐️ Уровень: <b>{level}</b>\n"
+        f"{evo['emoji']} <b>{name}</b> [{evo['name']}]{stars_str}\n"
+        f"Уровень: <b>{level}</b>\n"
         f"📊 XP: <b>{xp}</b> / <b>{needed}</b>\n"
         f"[{bar}] {pct}%\n\n"
         f"❤️ Здоровье:\n{hunger_bar(cabbit)}\n\n"
@@ -487,7 +498,7 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
         else:
-            xp_mult = evo["xp_mult"]
+            xp_mult = evo["xp_mult"] + cabbit.get("prestige_stars", 0) * 0.1
             if cabbit.get("crown_boxes", 0) > 0:
                 xp_mult *= 2
                 cabbit["crown_boxes"] -= 1
@@ -550,15 +561,20 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # Common updates
         cabbit["box_available"] = False
         cabbit["box_ts"]        = now + box_cd
-        cabbit["last_fed"]      = now
-        cabbit["warned_12h"]    = False
-        cabbit["warned_23h"]    = False
+        if not got_knife:
+            heal = FOOD_HEAL.get(food_name, 3 * 3600)
+            cabbit["last_fed"] = min(now, cabbit.get("last_fed", now) + heal)
+        elapsed_after = now - cabbit.get("last_fed", now)
+        if elapsed_after < WARN_12H:
+            cabbit["warned_12h"] = False
+        if elapsed_after < WARN_23H:
+            cabbit["warned_23h"] = False
         cabbit["duel_tokens"]   = cabbit.get("duel_tokens", 0) + 1
 
         # Quest progress
         update_quest_progress(cabbit, "open_boxes")
-        update_quest_progress(cabbit, "feed_cabbit")
         if not got_knife:
+            update_quest_progress(cabbit, "feed_cabbit")
             update_quest_progress(cabbit, "earn_xp", actual_xp)
 
         # Achievements
@@ -923,6 +939,44 @@ async def cmd_knife(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_prestige(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid    = str(update.effective_user.id)
+    cabbit = cabbit_db.get(uid)
+    if not cabbit or cabbit.get("dead"):
+        await update.message.reply_text("❌ Сначала создай кеббита через /cabbit")
+        return
+
+    if cabbit.get("level", 1) < 30:
+        await update.message.reply_text(
+            f"❌ Нужен 30 уровень для престижа. Сейчас: {cabbit.get('level', 1)}"
+        )
+        return
+
+    stars = cabbit.get("prestige_stars", 0) + 1
+    cabbit["prestige_stars"] = stars
+    cabbit["level"] = 1
+    cabbit["xp"] = 0
+    cabbit["food_counts"] = {"Морковь": 0, "Корм": 0, "Вкусность": 0}
+    cabbit["last_fed"] = int(time.time())
+    cabbit["warned_12h"] = False
+    cabbit["warned_23h"] = False
+    cabbit["sick"] = False
+    cabbit["sick_until"] = 0
+    cabbit["crown_boxes"] = 0
+    cabbit_db.save_cabbit(uid, cabbit)
+
+    await update.message.reply_text(
+        f"{'━' * 20}\n"
+        f"🌟 <b>ПРЕСТИЖ {stars}!</b>\n"
+        f"{'━' * 20}\n\n"
+        f"Уровень сброшен до 1\n"
+        f"{'⭐' * stars} Постоянный бонус: <b>+{stars * 10}%</b> XP\n\n"
+        f"Инвентарь, достижения и статистика сохранены.\n\n"
+        f"{cabbit_status(cabbit)}",
+        parse_mode="HTML",
+    )
+
+
 async def cmd_leaderboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     all_  = cabbit_db.get_all()
     alive = [(uid, c) for uid, c in all_.items() if not c.get("dead")]
@@ -930,7 +984,7 @@ async def cmd_leaderboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🏆 Пока нет живых кеббитов.")
         return
 
-    alive.sort(key=lambda x: (x[1]["level"], x[1]["xp"]), reverse=True)
+    alive.sort(key=lambda x: (x[1].get("prestige_stars", 0), x[1]["level"], x[1]["xp"]), reverse=True)
     lines = ["🏆 <b>Лидерборд кеббитов:</b>\n"]
     medals = ["🥇", "🥈", "🥉"]
     for i, (uid, c) in enumerate(alive[:10], 1):
@@ -938,8 +992,10 @@ async def cmd_leaderboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         knife = " 🔪" if c.get("has_knife") else ""
         evo   = get_evolution(c["level"])
         achs  = len(c.get("achievements", []))
+        stars = c.get("prestige_stars", 0)
+        stars_str = f" {'⭐' * stars}" if stars > 0 else ""
         lines.append(
-            f"{medal} {evo['emoji']} <b>{c['name']}</b> — ур. {c['level']} "
+            f"{medal} {evo['emoji']} <b>{c['name']}</b>{stars_str} — ур. {c['level']} "
             f"({c['xp']} XP){knife} 🏅{achs}"
         )
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
