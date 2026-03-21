@@ -25,7 +25,7 @@ from storage import Storage
 from cabbit import (
     cmd_cabbit, receive_name, cancel, callback_cabbit,
     callback_kill, cmd_knife, cmd_leaderboard, cmd_raid,
-    callback_use_item,
+    cmd_prestige, callback_use_item,
     box_notifier, NAMING_STATE, cabbit_db,
 )
 from duel import (
@@ -36,6 +36,7 @@ from promo import cmd_promo, cmd_createpromo, cmd_listpromos, cmd_deletepromo
 from casino import cmd_casino
 from quests import cmd_quests, callback_quest_claim
 from achievements import cmd_achievements
+from reaction import callback_reaction, reaction_notifier
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -410,6 +411,7 @@ async def cmd_helpcabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         "  /quests — ежедневные квесты\n"
         "  /achievements — достижения\n"
         "  /leaderboard — топ игроков\n"
+        "  /prestige — престиж (ур. 30+)\n"
         "  /knife — использовать нож\n",
         parse_mode="HTML",
     )
@@ -823,16 +825,19 @@ def main() -> None:
     app.add_handler(CommandHandler("quests",       cmd_quests))
     app.add_handler(CommandHandler("achievements", cmd_achievements))
     app.add_handler(CommandHandler("raid",         cmd_raid))
+    app.add_handler(CommandHandler("prestige",     cmd_prestige))
     app.add_handler(CommandHandler("promo",        cmd_promo))
     app.add_handler(CommandHandler("createpromo",  cmd_createpromo))
     app.add_handler(CommandHandler("listpromos",   cmd_listpromos))
     app.add_handler(CommandHandler("deletepromo",  cmd_deletepromo))
     app.add_handler(CallbackQueryHandler(callback_use_item,    pattern=r"^use_item:"))
     app.add_handler(CallbackQueryHandler(callback_quest_claim, pattern=r"^quest_claim:"))
+    app.add_handler(CallbackQueryHandler(callback_reaction,    pattern=r"^reaction:"))
 
     app.job_queue.run_once(lambda ctx: asyncio.create_task(restore_listeners(app)), when=2)
     app.job_queue.run_once(lambda ctx: asyncio.create_task(poll_zoho(app)), when=3)
     app.job_queue.run_once(lambda ctx: asyncio.create_task(box_notifier(app)), when=4)
+    app.job_queue.run_once(lambda ctx: asyncio.create_task(reaction_notifier(app)), when=5)
 
     logger.info("Bot started.")
     app.run_polling(drop_pending_updates=True)
