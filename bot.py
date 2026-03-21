@@ -392,8 +392,18 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "  /new — создать почту\n"
         "  /list — все почты\n"
         "  /inbox — читать письма\n"
-        "  /remove — удалить почту\n\n"
-        "🐰 <b>Кеббит:</b>\n"
+        "  /remove — удалить почту\n",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await cmd_start(update, ctx)
+
+
+async def cmd_helpcabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        "🐰 <b>Кеббит — команды:</b>\n\n"
         "  /cabbit — твой питомец\n"
         "  /casino СТАВКА — слот-машина\n"
         "  /raid — украсть XP\n"
@@ -403,10 +413,6 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "  /knife — использовать нож\n",
         parse_mode="HTML",
     )
-
-
-async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    await cmd_start(update, ctx)
 
 
 # /new — выбор домена через кнопки
@@ -784,8 +790,9 @@ async def callback_remove(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
 
 def main() -> None:
     app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start",  cmd_start))
-    app.add_handler(CommandHandler("help",   cmd_help))
+    app.add_handler(CommandHandler("start",      cmd_start))
+    app.add_handler(CommandHandler("help",       cmd_help))
+    app.add_handler(CommandHandler("helpcabbit", cmd_helpcabbit))
     app.add_handler(CommandHandler("new",    cmd_new))
     app.add_handler(CommandHandler("list",   cmd_list))
     app.add_handler(CommandHandler("inbox",  cmd_inbox))
