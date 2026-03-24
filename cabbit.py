@@ -10,7 +10,7 @@ import random
 import time
 from threading import Lock
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     ContextTypes, ConversationHandler, CommandHandler, MessageHandler, filters
 )
@@ -78,6 +78,61 @@ RULES_TEXT = (
     "для получения преимуществ приведёт к бану кеббита.\n\n"
     "Нажми <b>✅ Принимаю</b> чтобы продолжить."
 )
+
+REPLY_KB_LABELS = {"🐰 Кеббит", "🎰 Казино", "🏴‍☠️ Рейд", "📋 Квесты", "🏪 Магазин", "📊 Топ"}
+
+
+def get_reply_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [["🐰 Кеббит", "🎰 Казино", "🏴‍☠️ Рейд"],
+         ["📋 Квесты", "🏪 Магазин", "📊 Топ"]],
+        resize_keyboard=True,
+    )
+
+
+DUEL_PAGE_SIZE = 5
+
+
+def paginated_target_buttons(others: list[tuple[str, dict]], page: int,
+                              cb_prefix: str, cancel_cb: str) -> tuple[str, InlineKeyboardMarkup]:
+    total = len(others)
+    pages = (total + DUEL_PAGE_SIZE - 1) // DUEL_PAGE_SIZE
+    page  = max(0, min(page, pages - 1))
+    start = page * DUEL_PAGE_SIZE
+    chunk = others[start:start + DUEL_PAGE_SIZE]
+
+    buttons = [
+        [InlineKeyboardButton(
+            f"🐰 {c['name']} (ур. {c['level']}) — {c['xp']} XP",
+            callback_data=f"{cb_prefix}:{u}",
+        )]
+        for u, c in chunk
+    ]
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️", callback_data=f"duel_page:{page - 1}"))
+    nav.append(InlineKeyboardButton(f"{page + 1}/{pages}", callback_data="cabbit:refresh"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton("▶️", callback_data=f"duel_page:{page + 1}"))
+    if len(others) > DUEL_PAGE_SIZE:
+        buttons.append(nav)
+    buttons.append([InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)])
+    return InlineKeyboardMarkup(buttons)
+
+
+def do_prestige(cabbit: dict) -> int:
+    stars = cabbit.get("prestige_stars", 0) + 1
+    cabbit["prestige_stars"] = stars
+    cabbit["level"] = 1
+    cabbit["xp"] = 0
+    cabbit["food_counts"] = {"Морковь": 0, "Корм": 0, "Вкусность": 0}
+    cabbit["last_fed"] = int(time.time())
+    cabbit["warned_12h"] = False
+    cabbit["warned_23h"] = False
+    cabbit["sick"] = False
+    cabbit["sick_until"] = 0
+    cabbit["crown_boxes"] = 0
+    return stars
 
 
 def xp_for_level(level: int) -> int:
@@ -374,52 +429,38 @@ def cabbit_status(cabbit: dict) -> str:
     pct     = min(int(xp / needed * 100), 100)
     bar     = "█" * (pct // 10) + "░" * (10 - pct // 10)
 
-    evo = get_evolution(level)
+    evo   = get_evolution(level)
+    stars = cabbit.get("prestige_stars", 0)
+    stars_str = f" {'⭐' * stars}" if stars > 0 else ""
 
     now       = int(time.time())
     box_ts    = cabbit.get("box_ts", 0)
     box_avail = cabbit.get("box_available", True) or now >= box_ts
-
     if box_avail:
         box_str = "📦 Коробка готова!"
     else:
         left = max(0, box_ts - now)
         box_str = f"⏳ Коробка через {left // 60}м {left % 60}с"
 
-    counts   = cabbit.get("food_counts", {})
-    food_str = " | ".join(f"{e} {counts.get(n, 0)}" for n, e, _, _ in FOOD_TABLE)
+    hb = hunger_bar(cabbit)
+    tokens = cabbit.get("duel_tokens", 0)
+    coins  = cabbit.get("coins", 0)
 
-    inv = cabbit.get("inventory", {})
-    inv_items = [f"{e}{inv[n]}" for n, e, _ in ITEM_TABLE if inv.get(n, 0) > 0]
-    inv_str = " | ".join(inv_items) if inv_items else "пусто"
-
-    knife_str  = "\n🔪 <b>Есть нож!</b> /knife" if cabbit.get("has_knife") else ""
-    tokens     = cabbit.get("duel_tokens", 0)
-    token_str  = f"\n🥊 Жетонов: <b>{tokens}</b>" if tokens > 0 else ""
-    crown_str  = f"\n👑 Корона: x2 XP ещё <b>{cabbit.get('crown_boxes', 0)}</b> коробок" if cabbit.get("crown_boxes", 0) > 0 else ""
-    coins      = cabbit.get("coins", 0)
-    coins_str  = f"\n🪙 Монеты: <b>{coins}</b>"
-
-    skin_id = cabbit.get("skin")
     skin_str = ""
+    skin_id = cabbit.get("skin")
     if skin_id:
         skin_data = skin_db.get(skin_id)
         if skin_data:
             r_emoji = SkinStorage.RARITY_EMOJI.get(skin_data.get("rarity", "common"), "⚪")
-            skin_str = f"\n🎨 Скин: {r_emoji} <b>{skin_data['display_name']}</b>"
-
-    stars = cabbit.get("prestige_stars", 0)
-    stars_str = f" {'⭐' * stars}" if stars > 0 else ""
+            skin_str = f"\n🎨 {r_emoji} <b>{skin_data['display_name']}</b>"
 
     return (
         f"{evo['emoji']} <b>{name}</b> [{evo['name']}]{stars_str}\n"
-        f"Уровень: <b>{level}</b>\n"
-        f"📊 XP: <b>{xp}</b> / <b>{needed}</b>\n"
+        f"📊 Ур. <b>{level}</b> — {xp}/{needed} XP\n"
         f"[{bar}] {pct}%\n\n"
-        f"❤️ Здоровье:\n{hunger_bar(cabbit)}\n\n"
-        f"🍽 Еда: {food_str}\n"
-        f"🎒 Инвентарь: {inv_str}"
-        f"{knife_str}{token_str}{crown_str}{coins_str}{skin_str}\n\n"
+        f"{hb}\n\n"
+        f"🥊 Жетонов: <b>{tokens}</b>\n"
+        f"🪙 Монеты: <b>{coins}</b>{skin_str}\n\n"
         f"{box_str}"
     )
 
@@ -430,56 +471,21 @@ def cabbit_keyboard(cabbit: dict) -> InlineKeyboardMarkup:
     box_avail = cabbit.get("box_available", True) or now >= box_ts
     buttons   = []
 
-    # Row 1: коробка
     if box_avail:
         buttons.append([InlineKeyboardButton("📦 Открыть коробку", callback_data="cabbit:box")])
 
-    # Row 2: предметы
-    inv = cabbit.get("inventory", {})
-    item_btns = []
-    if inv.get("Зелье", 0) > 0:
-        item_btns.append(InlineKeyboardButton(f"🧪{inv['Зелье']}", callback_data="use_item:Зелье"))
-    if inv.get("Таблетка", 0) > 0 and cabbit.get("sick"):
-        item_btns.append(InlineKeyboardButton(f"💊{inv['Таблетка']}", callback_data="use_item:Таблетка"))
-    if inv.get("Магнит", 0) > 0:
-        item_btns.append(InlineKeyboardButton(f"🧲{inv['Магнит']}", callback_data="use_item:Магнит"))
-    if item_btns:
-        buttons.append(item_btns)
-
-    # Row 3: бой
-    fight_btns = []
-    if cabbit.get("has_knife"):
-        fight_btns.append(InlineKeyboardButton("🔪 Нож", callback_data="cabbit:knife"))
-    if cabbit.get("duel_tokens", 0) > 0:
-        fight_btns.append(InlineKeyboardButton("🥊 Дуэль", callback_data="cabbit:duel"))
-    if fight_btns:
-        buttons.append(fight_btns)
-
-    # Row 4: рейд + казино
-    action_btns = []
-    last_raid = cabbit.get("last_raid", 0)
-    if now >= last_raid + RAID_COOLDOWN:
-        action_btns.append(InlineKeyboardButton("🏴‍☠️ Рейд", callback_data="cabbit:raid"))
-    action_btns.append(InlineKeyboardButton("🎰 Казино", callback_data="cabbit:casino"))
-    buttons.append(action_btns)
-
-    # Row 5: скины + магазин + квесты
+    buttons.append([
+        InlineKeyboardButton("🎒 Инвентарь", callback_data="cabbit:inventory"),
+        InlineKeyboardButton("⚔️ Бой", callback_data="cabbit:fight"),
+    ])
     buttons.append([
         InlineKeyboardButton("🎨 Скины", callback_data="cabbit:skins"),
-        InlineKeyboardButton("🏪 Магазин", callback_data="cabbit:shop"),
-        InlineKeyboardButton("📋 Квесты", callback_data="cabbit:quests"),
+        InlineKeyboardButton("🏆 Ачивки", callback_data="cabbit:achievements"),
     ])
 
-    # Row 6: ачивки + лидерборд + престиж
-    row6 = [
-        InlineKeyboardButton("🏆 Ачивки", callback_data="cabbit:achievements"),
-        InlineKeyboardButton("📊 Топ", callback_data="cabbit:leaderboard"),
-    ]
     if cabbit.get("level", 1) >= 30:
-        row6.append(InlineKeyboardButton("🌟 Престиж", callback_data="cabbit:prestige"))
-    buttons.append(row6)
+        buttons.append([InlineKeyboardButton("🌟 Престиж", callback_data="cabbit:prestige")])
 
-    # Row 7: обновить
     buttons.append([InlineKeyboardButton("🔄 Обновить", callback_data="cabbit:refresh")])
     return InlineKeyboardMarkup(buttons)
 
@@ -575,7 +581,9 @@ async def callback_rules(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def receive_name_from_rules(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Ловит имя после принятия правил через callback (вне ConversationHandler)."""
     if not ctx.user_data.get("awaiting_cabbit_name"):
-        return  # не наш случай
+        return
+    if update.message.text.strip() in REPLY_KB_LABELS:
+        return
     ctx.user_data.pop("awaiting_cabbit_name", None)
 
     uid  = str(update.effective_user.id)
@@ -593,6 +601,7 @@ async def receive_name_from_rules(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         f"⚠️ Если не кормить 24 часа — кеббит умрёт.\n\n"
         f"Новые команды: /casino, /raid, /quests, /achievements",
         parse_mode="HTML",
+        reply_markup=get_reply_keyboard(),
     )
     await _send_cabbit_card(update.message, cabbit)
 
@@ -601,7 +610,7 @@ async def receive_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid  = str(update.effective_user.id)
     name = update.message.text.strip()[:20]
 
-    if not name:
+    if not name or name in REPLY_KB_LABELS:
         await update.message.reply_text("Имя не может быть пустым, попробуй ещё раз:")
         return NAMING_STATE
 
@@ -614,6 +623,7 @@ async def receive_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"⚠️ Если не кормить 24 часа — кеббит умрёт.\n\n"
         f"Новые команды: /casino, /raid, /quests, /achievements",
         parse_mode="HTML",
+        reply_markup=get_reply_keyboard(),
     )
     await _send_cabbit_card(update.message, cabbit)
     return ConversationHandler.END
@@ -665,6 +675,53 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if action == "refresh":
         cabbit_db.save_cabbit(uid, cabbit)
         await _edit_card(q, cabbit)
+        return
+
+    if action == "inventory":
+        inv = cabbit.get("inventory", {})
+        buttons = []
+        if inv.get("Зелье", 0) > 0:
+            buttons.append([InlineKeyboardButton(f"🧪 Зелье x{inv['Зелье']}", callback_data="use_item:Зелье")])
+        if inv.get("Таблетка", 0) > 0:
+            buttons.append([InlineKeyboardButton(f"💊 Таблетка x{inv['Таблетка']}", callback_data="use_item:Таблетка")])
+        if inv.get("Магнит", 0) > 0:
+            buttons.append([InlineKeyboardButton(f"🧲 Магнит x{inv['Магнит']}", callback_data="use_item:Магнит")])
+        if inv.get("Щит", 0) > 0:
+            buttons.append([InlineKeyboardButton(f"🛡 Щит x{inv['Щит']} (авто)", callback_data="cabbit:refresh")])
+        if cabbit.get("has_knife"):
+            buttons.append([InlineKeyboardButton("🔪 Использовать нож", callback_data="cabbit:knife")])
+        crown = cabbit.get("crown_boxes", 0)
+        crown_str = f"\n👑 Корона: x2 XP ещё {crown} коробок" if crown > 0 else ""
+        if not buttons:
+            buttons.append([InlineKeyboardButton("Пусто!", callback_data="cabbit:refresh")])
+        buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="cabbit:refresh")])
+        text = f"🎒 <b>Инвентарь</b>{crown_str}"
+        try:
+            await q.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+        except Exception:
+            await q.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if action == "fight":
+        now = int(time.time())
+        buttons = []
+        raid_cd = cabbit.get("last_raid", 0) + RAID_COOLDOWN
+        if now >= raid_cd:
+            buttons.append([InlineKeyboardButton("🏴‍☠️ Рейд", callback_data="cabbit:raid")])
+        else:
+            left = raid_cd - now
+            buttons.append([InlineKeyboardButton(f"🏴‍☠️ Рейд (⏳ {left // 60}м)", callback_data="cabbit:raid")])
+        tokens = cabbit.get("duel_tokens", 0)
+        if tokens > 0:
+            buttons.append([InlineKeyboardButton(f"🥊 Дуэль (жетонов: {tokens})", callback_data="cabbit:duel")])
+        else:
+            buttons.append([InlineKeyboardButton("🥊 Дуэль (нет жетонов)", callback_data="cabbit:refresh")])
+        buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="cabbit:refresh")])
+        text = "⚔️ <b>Бой</b>\n\n🏴‍☠️ Рейд — украсть XP (40% шанс)\n🥊 Дуэль — камень-ножницы-бумага"
+        try:
+            await q.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+        except Exception:
+            await q.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
         return
 
     if action == "knife":
@@ -815,11 +872,10 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         medals = ["🥇", "🥈", "🥉"]
         for i, (u, c) in enumerate(alive[:10], 1):
             medal = medals[i-1] if i <= 3 else f"{i}."
-            knife = " 🔪" if c.get("has_knife") else ""
             evo   = get_evolution(c["level"])
             stars = c.get("prestige_stars", 0)
             stars_str = f"{'⭐' * stars}" if stars > 0 else ""
-            lines.append(f"{medal} {evo['emoji']} <b>{c['name']}</b>{stars_str} — ур.{c['level']}{knife}")
+            lines.append(f"{medal} {evo['emoji']} <b>{c['name']}</b>{stars_str} — ур.{c['level']}")
         buttons = [[InlineKeyboardButton("◀️ Назад", callback_data="cabbit:refresh")]]
         text = "\n".join(lines) if alive else "Нет живых кеббитов."
         try:
@@ -854,17 +910,7 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if cabbit.get("level", 1) < 30:
             await q.answer("Нужен 30 уровень!", show_alert=True)
             return
-        stars = cabbit.get("prestige_stars", 0) + 1
-        cabbit["prestige_stars"] = stars
-        cabbit["level"] = 1
-        cabbit["xp"] = 0
-        cabbit["food_counts"] = {"Морковь": 0, "Корм": 0, "Вкусность": 0}
-        cabbit["last_fed"] = int(time.time())
-        cabbit["warned_12h"] = False
-        cabbit["warned_23h"] = False
-        cabbit["sick"] = False
-        cabbit["sick_until"] = 0
-        cabbit["crown_boxes"] = 0
+        stars = do_prestige(cabbit)
         cabbit_db.save_cabbit(uid, cabbit)
         text = (
             f"{'━' * 20}\n"
@@ -885,19 +931,12 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not others:
             await q.answer("Нет других живых кеббитов!", show_alert=True)
             return
-        buttons = [
-            [InlineKeyboardButton(
-                f"🐰 {c['name']} (ур. {c['level']}) — {c['xp']} XP",
-                callback_data=f"duel_send:{u}",
-            )]
-            for u, c in others
-        ]
-        buttons.append([InlineKeyboardButton("❌ Отмена", callback_data="duel_send:cancel")])
-        text = "🥊 <b>Выбери противника для дуэли</b>\n\nСтавка: <b>500 XP</b> | Best of 3"
+        kb   = paginated_target_buttons(others, 0, "duel_send", "duel_send:cancel")
+        text = "🥊 <b>Выбери противника для дуэли</b>"
         try:
-            await q.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+            await q.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=kb)
         except Exception:
-            await q.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+            await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
         return
 
     if action == "box":
@@ -1130,13 +1169,17 @@ async def callback_casino_bet(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if mult > 0:
         win = int(bet * mult)
-        apply_xp(cabbit, win)
+        net = win - bet
+        leveled_up, new_level = apply_xp(cabbit, net)
         stats["casino_wins"] = stats.get("casino_wins", 0) + 1
+        stats["xp_earned_total"] = stats.get("xp_earned_total", 0) + net
         text = (
             f"🎰 [ {line} ]\n\n"
             f"🎉 <b>ВЫИГРЫШ x{mult:.0f}!</b>\n"
-            f"💰 +{win} XP\n"
+            f"💰 +{net} XP\n"
         )
+        if leveled_up:
+            text += f"🎉 <b>УРОВЕНЬ {new_level}!</b>\n"
     else:
         cabbit["xp"] = max(0, cabbit.get("xp", 0) - bet)
         text = (
@@ -1158,6 +1201,25 @@ async def callback_casino_bet(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await _edit_card(q, cabbit, text)
 
 
+async def callback_duel_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q    = update.callback_query
+    await q.answer()
+    uid  = str(q.from_user.id)
+    page = int(q.data.split(":")[1])
+
+    all_   = cabbit_db.get_all()
+    others = [(u, c) for u, c in all_.items() if u != uid and not c.get("dead")]
+    if not others:
+        await q.answer("Нет других живых кеббитов!", show_alert=True)
+        return
+    kb   = paginated_target_buttons(others, page, "duel_send", "duel_send:cancel")
+    text = "🥊 <b>Выбери противника для дуэли</b>"
+    try:
+        await q.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+
+
 async def _show_knife_targets(q, attacker_uid: str):
     all_   = cabbit_db.get_all()
     others = [
@@ -1168,19 +1230,12 @@ async def _show_knife_targets(q, attacker_uid: str):
         await q.answer("Нет других живых кеббитов для атаки!", show_alert=True)
         return
 
-    buttons = [
-        [InlineKeyboardButton(
-            f"🐰 {c['name']} (ур. {c['level']})",
-            callback_data=f"kill:{uid}"
-        )]
-        for uid, c in others
-    ]
-    buttons.append([InlineKeyboardButton("❌ Отмена", callback_data="kill:cancel")])
+    kb = paginated_target_buttons(others, 0, "kill", "kill:cancel")
     try:
         await q.edit_message_caption(
             caption="🔪 <b>Выбери жертву:</b>",
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(buttons),
+            reply_markup=kb,
         )
     except Exception:
         await q.edit_message_text(
@@ -1330,7 +1385,7 @@ async def _do_raid(q, ctx, uid: str, cabbit: dict):
         stolen = max(1, int(target_cab.get("xp", 0) * 0.1))
         stolen = min(stolen, 500)
         target_cab["xp"] = max(0, target_cab.get("xp", 0) - stolen)
-        leveled, _ = apply_xp(cabbit, stolen)
+        leveled, new_level = apply_xp(cabbit, stolen)
         stats["raids_ok"] = stats.get("raids_ok", 0) + 1
         stats["xp_earned_total"] = stats.get("xp_earned_total", 0) + stolen
         cabbit_db.save_cabbit(target_uid, target_cab)
@@ -1353,9 +1408,10 @@ async def _do_raid(q, ctx, uid: str, cabbit: dict):
         except Exception:
             pass
 
+        lvl_str = f"\n🎉 <b>УРОВЕНЬ {new_level}!</b>" if leveled else ""
         text = (
             f"🏴‍☠️ <b>Рейд успешен!</b>\n\n"
-            f"Украл <b>{stolen} XP</b> у {target_cab['name']}!\n"
+            f"Украл <b>{stolen} XP</b> у {target_cab['name']}!{lvl_str}\n"
             f"🪙 +{COINS_RAID_OK} монет\n"
         )
         cabbit["coins"] = cabbit.get("coins", 0) + COINS_RAID_OK
@@ -1517,17 +1573,7 @@ async def cmd_prestige(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    stars = cabbit.get("prestige_stars", 0) + 1
-    cabbit["prestige_stars"] = stars
-    cabbit["level"] = 1
-    cabbit["xp"] = 0
-    cabbit["food_counts"] = {"Морковь": 0, "Корм": 0, "Вкусность": 0}
-    cabbit["last_fed"] = int(time.time())
-    cabbit["warned_12h"] = False
-    cabbit["warned_23h"] = False
-    cabbit["sick"] = False
-    cabbit["sick_until"] = 0
-    cabbit["crown_boxes"] = 0
+    stars = do_prestige(cabbit)
     cabbit_db.save_cabbit(uid, cabbit)
 
     await update.message.reply_text(
@@ -2435,16 +2481,61 @@ async def cmd_leaderboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     medals = ["🥇", "🥈", "🥉"]
     for i, (uid, c) in enumerate(alive[:10], 1):
         medal = medals[i-1] if i <= 3 else f"{i}."
-        knife = " 🔪" if c.get("has_knife") else ""
         evo   = get_evolution(c["level"])
         achs  = len(c.get("achievements", []))
         stars = c.get("prestige_stars", 0)
         stars_str = f" {'⭐' * stars}" if stars > 0 else ""
         lines.append(
             f"{medal} {evo['emoji']} <b>{c['name']}</b>{stars_str} — ур. {c['level']} "
-            f"({c['xp']} XP){knife} 🏅{achs}"
+            f"({c['xp']} XP) 🏅{achs}"
         )
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+# ─── Reply Keyboard ───────────────────────────────────────────────────────────
+
+async def handle_reply_keyboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    uid  = str(update.effective_user.id)
+
+    if text == "🐰 Кеббит":
+        cabbit = cabbit_db.get(uid)
+        if not cabbit or cabbit.get("dead"):
+            await update.message.reply_text("❌ Нет кеббита. Используй /cabbit")
+            return
+        check_sickness(cabbit)
+        cabbit_db.save_cabbit(uid, cabbit)
+        await _send_cabbit_card(update.message, cabbit)
+
+    elif text == "🎰 Казино":
+        cabbit = cabbit_db.get(uid)
+        if not cabbit or cabbit.get("dead"):
+            await update.message.reply_text("❌ Нет кеббита. /cabbit")
+            return
+        xp = cabbit.get("xp", 0)
+        stakes = [s for s in [10, 50, 100, 250, 500] if s <= xp]
+        if not stakes:
+            await update.message.reply_text("❌ Недостаточно XP для казино!")
+            return
+        buttons = [[InlineKeyboardButton(f"🎰 {s} XP", callback_data=f"casino_bet:{s}")] for s in stakes]
+        await update.message.reply_text(
+            f"🎰 <b>Казино</b>\n\nXP: <b>{xp}</b>\nВыбери ставку:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+
+    elif text == "🏴‍☠️ Рейд":
+        await cmd_raid(update, ctx)
+
+    elif text == "📋 Квесты":
+        from quests import cmd_quests
+        await cmd_quests(update, ctx)
+
+    elif text == "🏪 Магазин":
+        await cmd_shop(update, ctx)
+
+    elif text == "📊 Топ":
+        await cmd_leaderboard(update, ctx)
 
 
 # ─── Фоновый таймер ───────────────────────────────────────────────────────────

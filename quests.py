@@ -114,7 +114,8 @@ async def callback_quest_claim(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     task["claimed"] = True
     reward = task["reward"]
-    cabbit["xp"] = cabbit.get("xp", 0) + reward
+    from cabbit import apply_xp
+    leveled_up, new_level = apply_xp(cabbit, reward)
     stats = cabbit.setdefault("stats", {})
     stats["xp_earned_total"] = stats.get("xp_earned_total", 0) + reward
 
@@ -129,5 +130,6 @@ async def callback_quest_claim(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ach_text += f"\n{'━' * 20}"
 
     cabbit_db.save_cabbit(uid, cabbit)
-    text = f"✅ Квест выполнен!\n\n+{reward} XP{ach_text}\n\n💰 Баланс: <b>{cabbit.get('xp', 0)} XP</b>"
+    lvl_text = f"\n🎉 <b>УРОВЕНЬ {new_level}!</b>" if leveled_up else ""
+    text = f"✅ Квест выполнен!\n\n+{reward} XP{lvl_text}{ach_text}\n\n💰 Баланс: <b>{cabbit.get('xp', 0)} XP</b>"
     await q.edit_message_text(text, parse_mode="HTML")
