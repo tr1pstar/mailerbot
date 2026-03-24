@@ -323,3 +323,51 @@ async def cmd_deletepromo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🗑 Промокод <code>{code}</code> удалён.", parse_mode="HTML")
     else:
         await update.message.reply_text(f"❌ Промокод <code>{code}</code> не найден.", parse_mode="HTML")
+
+
+async def cmd_promoinfo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Админ смотрит кто активировал промокод: /promoinfo КОД"""
+    from config import ADMIN_ID
+    uid = str(update.effective_user.id)
+
+    if uid != str(ADMIN_ID):
+        await update.message.reply_text("❌ Нет доступа.")
+        return
+
+    if not ctx.args:
+        await update.message.reply_text("Использование: <code>/promoinfo КОД</code>", parse_mode="HTML")
+        return
+
+    code = ctx.args[0].strip().upper()
+    data = _load()
+
+    if code not in data:
+        await update.message.reply_text(f"❌ Промокод <code>{code}</code> не найден.", parse_mode="HTML")
+        return
+
+    promo = data[code]
+    info  = PROMO_TYPES.get(promo["type"], {})
+    emoji = info.get("emoji", "?")
+    type_str = promo["type"]
+    if promo["type"] == "xp":
+        type_str = f"xp ({promo.get('xp_amount', '?')} XP)"
+
+    used_by = promo.get("used_by", [])
+    lines = [
+        f"🔑 <b>Промокод:</b> <code>{code}</code>\n",
+        f"Тип: {emoji} {type_str}",
+        f"Осталось: <b>{promo['uses_left']}</b>",
+        f"Активировали: <b>{len(used_by)}</b>\n",
+    ]
+
+    if used_by:
+        from cabbit import cabbit_db
+        lines.append("👥 <b>Кто использовал:</b>")
+        for i, user_uid in enumerate(used_by, 1):
+            cab = cabbit_db.get(user_uid)
+            name = cab.get("name", "?") if cab else "—"
+            lines.append(f"  {i}. <code>{user_uid}</code> — {name}")
+    else:
+        lines.append("Ещё никто не использовал.")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")

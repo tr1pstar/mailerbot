@@ -42,7 +42,7 @@ from duel import (
     callback_duel_send, callback_duel_stake,
     callback_duel_accept, callback_duel_decline, callback_duel_move,
 )
-from promo import cmd_promo, cmd_createpromo, cmd_listpromos, cmd_deletepromo
+from promo import cmd_promo, cmd_createpromo, cmd_listpromos, cmd_deletepromo, cmd_promoinfo
 from casino import cmd_casino
 from quests import cmd_quests, callback_quest_claim
 from achievements import cmd_achievements
@@ -873,6 +873,7 @@ def main() -> None:
     app.add_handler(CommandHandler("createpromo",  cmd_createpromo))
     app.add_handler(CommandHandler("listpromos",   cmd_listpromos))
     app.add_handler(CommandHandler("deletepromo",  cmd_deletepromo))
+    app.add_handler(CommandHandler("promoinfo",    cmd_promoinfo))
     app.add_handler(CallbackQueryHandler(callback_use_item,    pattern=r"^use_item:"))
     app.add_handler(CallbackQueryHandler(callback_quest_claim, pattern=r"^quest_claim:"))
     app.add_handler(CallbackQueryHandler(callback_reaction,    pattern=r"^reaction:"))
