@@ -123,7 +123,7 @@ async def callback_quest_claim(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ach_text = ""
     if new_achs:
         bonus = unlock_achievements(cabbit, new_achs)
-        cabbit["xp"] += bonus
+        apply_xp(cabbit, bonus)
         ach_text = f"\n\n{'━' * 20}\n🏆 <b>ДОСТИЖЕНИЕ РАЗБЛОКИРОВАНО!</b>"
         for a in new_achs:
             ach_text += f"\n  {a['emoji']} <b>{a['name']}</b> — {a['desc']}\n  💰 +{a['reward']} XP"
@@ -132,4 +132,7 @@ async def callback_quest_claim(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cabbit_db.save_cabbit(uid, cabbit)
     lvl_text = f"\n🎉 <b>УРОВЕНЬ {new_level}!</b>" if leveled_up else ""
     text = f"✅ Квест выполнен!\n\n+{reward} XP{lvl_text}{ach_text}\n\n💰 Баланс: <b>{cabbit.get('xp', 0)} XP</b>"
-    await q.edit_message_text(text, parse_mode="HTML")
+    try:
+        await q.edit_message_caption(caption=text, parse_mode="HTML")
+    except Exception:
+        await q.edit_message_text(text, parse_mode="HTML")

@@ -158,7 +158,8 @@ async def cmd_promo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ach_text = ""
         if new_achs:
             bonus = unlock_achievements(cabbit, new_achs)
-            cabbit["xp"] += bonus
+            from cabbit import apply_xp as _apply_xp
+            _apply_xp(cabbit, bonus)
             ach_text = f"\n\n{'━' * 20}\n🏆 <b>ДОСТИЖЕНИЕ РАЗБЛОКИРОВАНО!</b>"
             for a in new_achs:
                 ach_text += f"\n  {a['emoji']} <b>{a['name']}</b> — {a['desc']}\n  💰 +{a['reward']} XP"
