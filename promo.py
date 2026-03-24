@@ -20,6 +20,7 @@ PROMO_TYPES = {
     "корм":      {"emoji": "🍗", "food": "Корм",       "xp": 200},
     "вкусность": {"emoji": "✨", "food": "Вкусность",  "xp": 500},
     "жетон":     {"emoji": "🥊", "food": None,         "xp": 0},
+    "xp":        {"emoji": "💰", "food": None,         "xp": 0},  # кастомный XP
 }
 
 
@@ -38,7 +39,7 @@ def _save(data: dict) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def create_promo(code: str, promo_type: str, uses: int = 1) -> bool:
+def create_promo(code: str, promo_type: str, uses: int = 1, xp_amount: int = 0) -> bool:
     """Создать промокод. Возвращает False если уже существует."""
     with _lock:
         data = _load()
@@ -48,6 +49,7 @@ def create_promo(code: str, promo_type: str, uses: int = 1) -> bool:
             "type":      promo_type,
             "uses_left": uses,
             "used_by":   [],
+            "xp_amount": xp_amount,
         }
         _save(data)
     return True
@@ -90,10 +92,11 @@ def list_promos() -> list[dict]:
     result = []
     for code, p in data.items():
         result.append({
-            "code":      code,
-            "type":      p["type"],
-            "uses_left": p["uses_left"],
+            "code":       code,
+            "type":       p["type"],
+            "uses_left":  p["uses_left"],
             "used_count": len(p["used_by"]),
+            "xp_amount":  p.get("xp_amount", 0),
         })
     return result
 
@@ -143,6 +146,32 @@ async def cmd_promo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{cabbit_status(cabbit)}",
             parse_mode="HTML",
         )
+    elif ptype == "xp":
+        xp_amount = promo.get("xp_amount", 0)
+        if xp_amount <= 0:
+            await update.message.reply_text("❌ Промокод повреждён (0 XP).")
+            return
+        leveled_up, new_level = apply_xp(cabbit, xp_amount)
+        stats = cabbit.setdefault("stats", {})
+        stats["xp_earned_total"] = stats.get("xp_earned_total", 0) + xp_amount
+
+        from achievements import check_achievements, unlock_achievements
+        new_achs = check_achievements(cabbit)
+        ach_text = ""
+        if new_achs:
+            bonus = unlock_achievements(cabbit, new_achs)
+            apply_xp(cabbit, bonus)
+            ach_text = f"\n\n{'━' * 20}\n🏆 <b>ДОСТИЖЕНИЕ РАЗБЛОКИРОВАНО!</b>"
+            for a in new_achs:
+                ach_text += f"\n  {a['emoji']} <b>{a['name']}</b> — {a['desc']}\n  💰 +{a['reward']} XP"
+            ach_text += f"\n{'━' * 20}"
+
+        cabbit_db.save_cabbit(uid, cabbit)
+        text = f"✅ Промокод активирован!\n\n💰 <b>+{xp_amount} XP</b>\n"
+        if leveled_up:
+            text += f"🎉 <b>УРОВЕНЬ {new_level}!</b>\n"
+        text += f"{ach_text}\n{cabbit_status(cabbit)}"
+        await update.message.reply_text(text, parse_mode="HTML")
     else:
         food_name = info["food"]
         food_xp   = info["xp"]
@@ -193,14 +222,15 @@ async def cmd_createpromo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "Использование: <code>/createpromo КОД ТИП [кол-во]</code>\n\n"
             "Типы: <code>морковь</code>, <code>корм</code>, <code>вкусность</code>, <code>жетон</code>\n"
-            "Пример: <code>/createpromo SUMMER24 вкусность 10</code>",
+            "XP: <code>/createpromo КОД xp КОЛИЧЕСТВО_XP [кол-во_использований]</code>\n"
+            "Пример: <code>/createpromo SUMMER24 вкусность 10</code>\n"
+            "Пример: <code>/createpromo BUGFIX xp 500 50</code>",
             parse_mode="HTML",
         )
         return
 
     code  = ctx.args[0].strip().upper()
     ptype = ctx.args[1].strip().lower()
-    uses  = int(ctx.args[2]) if len(ctx.args) >= 3 and ctx.args[2].isdigit() else 1
 
     if ptype not in PROMO_TYPES:
         await update.message.reply_text(
@@ -208,19 +238,42 @@ async def cmd_createpromo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    ok = create_promo(code, ptype, uses)
-    if not ok:
-        await update.message.reply_text(f"❌ Промокод <code>{code}</code> уже существует.", parse_mode="HTML")
-        return
-
-    info = PROMO_TYPES[ptype]
-    await update.message.reply_text(
-        f"✅ Промокод создан!\n\n"
-        f"🔑 Код: <code>{code}</code>\n"
-        f"Тип: {info['emoji']} {ptype}\n"
-        f"Использований: <b>{uses}</b>",
-        parse_mode="HTML",
-    )
+    if ptype == "xp":
+        # /createpromo CODE xp 500 [uses]
+        if len(ctx.args) < 3 or not ctx.args[2].isdigit():
+            await update.message.reply_text(
+                "Для XP промокода укажи количество:\n"
+                "<code>/createpromo КОД xp 500 [кол-во_использований]</code>",
+                parse_mode="HTML",
+            )
+            return
+        xp_amount = int(ctx.args[2])
+        uses = int(ctx.args[3]) if len(ctx.args) >= 4 and ctx.args[3].isdigit() else 1
+        ok = create_promo(code, ptype, uses, xp_amount=xp_amount)
+        if not ok:
+            await update.message.reply_text(f"❌ Промокод <code>{code}</code> уже существует.", parse_mode="HTML")
+            return
+        await update.message.reply_text(
+            f"✅ Промокод создан!\n\n"
+            f"🔑 Код: <code>{code}</code>\n"
+            f"Тип: 💰 XP — <b>{xp_amount} XP</b>\n"
+            f"Использований: <b>{uses}</b>",
+            parse_mode="HTML",
+        )
+    else:
+        uses = int(ctx.args[2]) if len(ctx.args) >= 3 and ctx.args[2].isdigit() else 1
+        ok = create_promo(code, ptype, uses)
+        if not ok:
+            await update.message.reply_text(f"❌ Промокод <code>{code}</code> уже существует.", parse_mode="HTML")
+            return
+        info = PROMO_TYPES[ptype]
+        await update.message.reply_text(
+            f"✅ Промокод создан!\n\n"
+            f"🔑 Код: <code>{code}</code>\n"
+            f"Тип: {info['emoji']} {ptype}\n"
+            f"Использований: <b>{uses}</b>",
+            parse_mode="HTML",
+        )
 
 
 async def cmd_listpromos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -241,8 +294,11 @@ async def cmd_listpromos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     for p in promos:
         info = PROMO_TYPES.get(p["type"], {})
         emoji = info.get("emoji", "?")
+        type_str = p["type"]
+        if p["type"] == "xp":
+            type_str = f"xp ({p.get('xp_amount', '?')} XP)"
         lines.append(
-            f"{emoji} <code>{p['code']}</code> — {p['type']} "
+            f"{emoji} <code>{p['code']}</code> — {type_str} "
             f"| осталось: <b>{p['uses_left']}</b> | использовано: {p['used_count']}"
         )
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")

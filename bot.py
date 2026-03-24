@@ -27,6 +27,7 @@ from cabbit import (
     callback_cabbit, callback_rules, callback_casino_bet,
     callback_kill, cmd_knife, cmd_leaderboard, cmd_raid,
     cmd_prestige, callback_use_item, cmd_bancabbit, cmd_cabbitlist,
+    callback_cabbitlist_page,
     cmd_broadcast, cmd_addxp,
     cmd_skins, callback_skin_select, cmd_shop, callback_shop_buy,
     callback_shop_confirm, callback_shop_back,
@@ -847,6 +848,7 @@ def main() -> None:
     app.add_handler(CommandHandler("prestige",     cmd_prestige))
     app.add_handler(CommandHandler("bancabbit",    cmd_bancabbit))
     app.add_handler(CommandHandler("cabbitlist",   cmd_cabbitlist))
+    app.add_handler(CallbackQueryHandler(callback_cabbitlist_page, pattern=r"^clist:"))
     app.add_handler(CommandHandler("broadcast",    cmd_broadcast))
     app.add_handler(CommandHandler("addxp",        cmd_addxp))
     # Skins — players

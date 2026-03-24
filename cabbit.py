@@ -346,8 +346,11 @@ class SkinStorage:
                 if v.get("level_weight", 0) > 0]
 
     def get_shop(self) -> list[tuple[str, dict]]:
-        return [(k, v) for k, v in self._load().items()
-                if v.get("shop_price") is not None and v["shop_price"] > 0]
+        _RARITY_ORDER = {"common": 0, "rare": 1, "epic": 2, "legendary": 3}
+        items = [(k, v) for k, v in self._load().items()
+                 if v.get("shop_price") is not None and v["shop_price"] > 0]
+        items.sort(key=lambda x: _RARITY_ORDER.get(x[1].get("rarity", "common"), 0))
+        return items
 
 
 skin_db = SkinStorage()
@@ -409,14 +412,20 @@ def hunger_bar(cabbit: dict) -> str:
     filled   = pct // 10
     bar      = "❤️" * filled + "🖤" * (10 - filled)
 
-    if pct > 60:   mood = "Сытый и довольный 😊"
-    elif pct > 30: mood = "Немного голоден 😐"
-    elif pct > 10: mood = "Очень голоден! 😨"
-    else:          mood = "Умирает от голода! 💀"
+    is_sick = check_sickness(cabbit)
 
-    if check_sickness(cabbit):
+    if pct > 60:
+        mood = "Сытый, но болен 🤒" if is_sick else "Сытый и довольный 😊"
+    elif pct > 30:
+        mood = "Голоден и болен 😰" if is_sick else "Немного голоден 😐"
+    elif pct > 10:
+        mood = "Очень голоден и болен! 😱" if is_sick else "Очень голоден! 😨"
+    else:
+        mood = "Умирает от голода! 💀"
+
+    if is_sick:
         left = max(0, cabbit.get("sick_until", 0) - now)
-        mood += f"\n🤒 Болен! (осталось {left // 3600}ч {(left % 3600) // 60}м)"
+        mood += f"\n🤒 Болезнь (осталось {left // 3600}ч {(left % 3600) // 60}м)"
 
     return f"{bar} {pct}%\n{mood}"
 
@@ -1745,10 +1754,36 @@ async def cmd_addxp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
+CABBITLIST_PAGE_SIZE = 10
+
+
+def _format_cabbitlist_entry(uid: str, c: dict) -> str:
+    evo = get_evolution(c.get("level", 1))
+    status_parts = []
+    if c.get("dead") and c.get("banned"):
+        status_parts.append(f"🔨 забанен")
+    elif c.get("dead"):
+        status_parts.append("💀 мёртв")
+    else:
+        status_parts.append("✅ жив")
+    if c.get("has_knife"):
+        status_parts.append("🔪")
+    if c.get("sick"):
+        status_parts.append("🤒")
+    stars = c.get("prestige_stars", 0)
+    stars_str = f" {'⭐' * stars}" if stars > 0 else ""
+    status = " | ".join(status_parts)
+    return (
+        f"{evo['emoji']} <b>{c.get('name', '?')}</b>{stars_str} — "
+        f"ур. {c.get('level', 1)} ({c.get('xp', 0)} XP)\n"
+        f"   👤 <code>{uid}</code> | {status}"
+    )
+
+
 async def cmd_cabbitlist(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
-    /cabbitlist — только для админа.
-    Показывает всех кеббитов с uid владельцев, уровнем, статусом.
+    /cabbitlist [uid] — список кеббитов с пагинацией.
+    /cabbitlist 12345 — поиск по uid.
     """
     from config import ADMIN_ID
 
@@ -1761,47 +1796,78 @@ async def cmd_cabbitlist(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Кеббитов пока нет.")
         return
 
-    lines = ["📋 <b>Все кеббиты (админ):</b>\n"]
-    for uid, c in all_.items():
-        evo = get_evolution(c.get("level", 1))
-        status_parts = []
-        if c.get("dead") and c.get("banned"):
-            status_parts.append(f"🔨 забанен: {c.get('ban_reason', '—')}")
-        elif c.get("dead"):
-            status_parts.append("💀 мёртв")
+    args = ctx.args
+    # Поиск по uid
+    if args and args[0].strip():
+        query = args[0].strip()
+        if query in all_:
+            entry = _format_cabbitlist_entry(query, all_[query])
+            await update.message.reply_text(f"📋 <b>Результат поиска:</b>\n\n{entry}", parse_mode="HTML")
         else:
-            status_parts.append("✅ жив")
-        if c.get("has_knife"):
-            status_parts.append("🔪")
-        if c.get("sick"):
-            status_parts.append("🤒")
-
-        stars = c.get("prestige_stars", 0)
-        stars_str = f" {'⭐' * stars}" if stars > 0 else ""
-        status = " | ".join(status_parts)
-
-        lines.append(
-            f"{evo['emoji']} <b>{c.get('name', '?')}</b>{stars_str} — "
-            f"ур. {c.get('level', 1)} ({c.get('xp', 0)} XP)\n"
-            f"   👤 ID: <code>{uid}</code> | {status}"
-        )
-
-    # Telegram лимит 4096 символов — разбиваем если надо
-    text = "\n".join(lines)
-    if len(text) <= 4000:
-        await update.message.reply_text(text, parse_mode="HTML")
-    else:
-        # Отправляем частями
-        chunk_lines = [lines[0]]
-        for line in lines[1:]:
-            test = "\n".join(chunk_lines + [line])
-            if len(test) > 4000:
-                await update.message.reply_text("\n".join(chunk_lines), parse_mode="HTML")
-                chunk_lines = [line]
+            # Поиск по частичному совпадению uid или имени
+            found = []
+            for uid, c in all_.items():
+                if query in uid or query.lower() in c.get("name", "").lower():
+                    found.append((uid, c))
+            if not found:
+                await update.message.reply_text(f"❌ Ничего не найдено по запросу: <code>{query}</code>", parse_mode="HTML")
             else:
-                chunk_lines.append(line)
-        if chunk_lines:
-            await update.message.reply_text("\n".join(chunk_lines), parse_mode="HTML")
+                lines = [f"📋 <b>Найдено ({len(found)}):</b>\n"]
+                for uid, c in found[:20]:
+                    lines.append(_format_cabbitlist_entry(uid, c))
+                await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        return
+
+    # Пагинация — первая страница
+    items = list(all_.items())
+    total = len(items)
+    page_items = items[:CABBITLIST_PAGE_SIZE]
+
+    lines = [f"📋 <b>Все кеббиты ({total}):</b> стр. 1/{(total - 1) // CABBITLIST_PAGE_SIZE + 1}\n"]
+    for uid, c in page_items:
+        lines.append(_format_cabbitlist_entry(uid, c))
+
+    buttons = []
+    if total > CABBITLIST_PAGE_SIZE:
+        buttons.append([InlineKeyboardButton("▶️ Далее", callback_data="clist:1")])
+    kb = InlineKeyboardMarkup(buttons) if buttons else None
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML", reply_markup=kb)
+
+
+async def callback_cabbitlist_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Листание страниц /cabbitlist."""
+    from config import ADMIN_ID
+    q = update.callback_query
+    await q.answer()
+    if q.from_user.id != ADMIN_ID:
+        return
+
+    page = int(q.data.split(":")[1])
+    all_ = cabbit_db.get_all()
+    items = list(all_.items())
+    total = len(items)
+    total_pages = (total - 1) // CABBITLIST_PAGE_SIZE + 1
+    start = page * CABBITLIST_PAGE_SIZE
+    page_items = items[start:start + CABBITLIST_PAGE_SIZE]
+
+    if not page_items:
+        await q.answer("Страница пуста.", show_alert=True)
+        return
+
+    lines = [f"📋 <b>Все кеббиты ({total}):</b> стр. {page + 1}/{total_pages}\n"]
+    for uid, c in page_items:
+        lines.append(_format_cabbitlist_entry(uid, c))
+
+    buttons = []
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️ Назад", callback_data=f"clist:{page - 1}"))
+    if start + CABBITLIST_PAGE_SIZE < total:
+        nav.append(InlineKeyboardButton("▶️ Далее", callback_data=f"clist:{page + 1}"))
+    if nav:
+        buttons.append(nav)
+
+    await q.edit_message_text("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons) if buttons else None)
 
 
 # ─── Админ: рассылка ─────────────────────────────────────────────────────────
@@ -2493,12 +2559,12 @@ async def cmd_leaderboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     for i, (uid, c) in enumerate(alive[:10], 1):
         medal = medals[i-1] if i <= 3 else f"{i}."
         evo   = get_evolution(c["level"])
-        achs  = len(c.get("achievements", []))
         stars = c.get("prestige_stars", 0)
         stars_str = f" {'⭐' * stars}" if stars > 0 else ""
+        knife = " 🔪" if c.get("has_knife") else ""
         lines.append(
             f"{medal} {evo['emoji']} <b>{c['name']}</b>{stars_str} — ур. {c['level']} "
-            f"({c['xp']} XP) 🏅{achs}"
+            f"({c['xp']} XP){knife}"
         )
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
