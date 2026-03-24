@@ -474,8 +474,8 @@ def cabbit_keyboard(cabbit: dict) -> InlineKeyboardMarkup:
     if box_avail:
         buttons.append([InlineKeyboardButton("📦 Открыть коробку", callback_data="cabbit:box")])
 
+    buttons.append([InlineKeyboardButton("🎒 Инвентарь", callback_data="cabbit:inventory")])
     buttons.append([
-        InlineKeyboardButton("🎒 Инвентарь", callback_data="cabbit:inventory"),
         InlineKeyboardButton("🎨 Скины", callback_data="cabbit:skins"),
         InlineKeyboardButton("🏆 Ачивки", callback_data="cabbit:achievements"),
     ])
