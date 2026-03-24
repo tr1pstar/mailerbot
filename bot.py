@@ -25,7 +25,7 @@ from storage import Storage
 from cabbit import (
     cmd_cabbit, receive_name, cancel, callback_cabbit,
     callback_kill, cmd_knife, cmd_leaderboard, cmd_raid,
-    cmd_prestige, callback_use_item,
+    cmd_prestige, callback_use_item, cmd_bancabbit, cmd_cabbitlist,
     box_notifier, NAMING_STATE, cabbit_db,
 )
 from duel import (
@@ -826,6 +826,8 @@ def main() -> None:
     app.add_handler(CommandHandler("achievements", cmd_achievements))
     app.add_handler(CommandHandler("raid",         cmd_raid))
     app.add_handler(CommandHandler("prestige",     cmd_prestige))
+    app.add_handler(CommandHandler("bancabbit",    cmd_bancabbit))
+    app.add_handler(CommandHandler("cabbitlist",   cmd_cabbitlist))
     app.add_handler(CommandHandler("promo",        cmd_promo))
     app.add_handler(CommandHandler("createpromo",  cmd_createpromo))
     app.add_handler(CommandHandler("listpromos",   cmd_listpromos))

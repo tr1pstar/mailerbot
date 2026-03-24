@@ -481,12 +481,12 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             cabbit["has_knife"] = True
             text_parts.append("\n🔪 <b>ВАУ! Выпал НОЖ!</b>\nМожешь убить чужого кеббита!\n")
             # Уведомляем всех остальных
-            all_ = cabbit_db.get_all()
-            for other_uid, other_cab in all_.items():
+            all_notify = cabbit_db.get_all()
+            for other_uid, other_cab in all_notify.items():
                 if other_uid == uid or other_cab.get("dead"):
                     continue
                 try:
-                    await q.message.bot.send_message(
+                    await ctx.application.bot.send_message(
                         chat_id=int(other_uid),
                         text=(
                             "🔪 <b>Кто-то нашёл нож!</b>\n\n"
@@ -495,8 +495,8 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         ),
                         parse_mode="HTML",
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"knife notify uid={other_uid}: {e}")
         else:
             xp_mult = evo["xp_mult"] + cabbit.get("prestige_stars", 0) * 0.1
             if cabbit.get("crown_boxes", 0) > 0:
@@ -538,11 +538,13 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if event:
             text_parts.append(f"\n\n⚡️ {event['text']}")
             if event.get("xp"):
-                cabbit["xp"] = max(0, cabbit.get("xp", 0) + event["xp"])
+                if event["xp"] > 0:
+                    ev_leveled, _ = apply_xp(cabbit, event["xp"])
+                    stats["xp_earned_total"] = stats.get("xp_earned_total", 0) + event["xp"]
+                else:
+                    cabbit["xp"] = max(0, cabbit.get("xp", 0) + event["xp"])
                 sign = "+" if event["xp"] > 0 else ""
                 text_parts.append(f"\n  {sign}{event['xp']} XP")
-                if event["xp"] > 0:
-                    stats["xp_earned_total"] = stats.get("xp_earned_total", 0) + event["xp"]
             if event.get("tokens"):
                 cabbit["duel_tokens"] = cabbit.get("duel_tokens", 0) + event["tokens"]
                 text_parts.append(f"\n  +{event['tokens']} жетон дуэли")
@@ -581,7 +583,7 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         new_achs = check_achievements(cabbit)
         if new_achs:
             bonus = unlock_achievements(cabbit, new_achs)
-            cabbit["xp"] += bonus
+            apply_xp(cabbit, bonus)
             text_parts.append(f"\n\n{'━' * 20}")
             text_parts.append("\n🏆 <b>ДОСТИЖЕНИЕ РАЗБЛОКИРОВАНО!</b>")
             for a in new_achs:
@@ -719,7 +721,7 @@ async def callback_kill(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ach_text = ""
     if new_achs:
         bonus = unlock_achievements(attacker, new_achs)
-        attacker["xp"] += bonus
+        apply_xp(attacker, bonus)
         cabbit_db.save_cabbit(attacker_uid, attacker)
         ach_text = f"\n\n{'━' * 20}\n🏆 <b>ДОСТИЖЕНИЕ РАЗБЛОКИРОВАНО!</b>"
         for a in new_achs:
@@ -773,7 +775,7 @@ async def _do_raid(q, ctx, uid: str, cabbit: dict):
         stolen = max(1, int(target_cab.get("xp", 0) * 0.1))
         stolen = min(stolen, 500)
         target_cab["xp"] = max(0, target_cab.get("xp", 0) - stolen)
-        cabbit["xp"] = cabbit.get("xp", 0) + stolen
+        leveled, _ = apply_xp(cabbit, stolen)
         stats["raids_ok"] = stats.get("raids_ok", 0) + 1
         stats["xp_earned_total"] = stats.get("xp_earned_total", 0) + stolen
         cabbit_db.save_cabbit(target_uid, target_cab)
@@ -807,7 +809,7 @@ async def _do_raid(q, ctx, uid: str, cabbit: dict):
     new_achs = check_achievements(cabbit)
     if new_achs:
         bonus = unlock_achievements(cabbit, new_achs)
-        cabbit["xp"] += bonus
+        apply_xp(cabbit, bonus)
         text += f"\n\n{'━' * 20}\n🏆 <b>ДОСТИЖЕНИЕ РАЗБЛОКИРОВАНО!</b>"
         for a in new_achs:
             text += f"\n  {a['emoji']} <b>{a['name']}</b> — {a['desc']}\n  💰 +{a['reward']} XP"
@@ -889,7 +891,7 @@ async def callback_use_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         stolen = random.randint(100, 300)
         stolen = min(stolen, t_cab.get("xp", 0))
         t_cab["xp"] = max(0, t_cab.get("xp", 0) - stolen)
-        cabbit["xp"] = cabbit.get("xp", 0) + stolen
+        apply_xp(cabbit, stolen)
         cabbit_db.save_cabbit(t_uid, t_cab)
 
         try:
@@ -975,6 +977,144 @@ async def cmd_prestige(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{cabbit_status(cabbit)}",
         parse_mode="HTML",
     )
+
+
+# ─── Админ: бан кеббита ──────────────────────────────────────────────────────
+
+async def cmd_bancabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    /bancabbit <user_id> <причина>
+    Админ убивает (банит) чужого кеббита с указанием причины.
+    """
+    from config import ADMIN_ID
+
+    caller = update.effective_user.id
+    if caller != ADMIN_ID:
+        await update.message.reply_text("❌ Только администратор может банить кеббитов.")
+        return
+
+    args = (update.message.text or "").split(maxsplit=2)
+    # /bancabbit <uid> <reason>
+    if len(args) < 3:
+        # Показать список живых кеббитов
+        all_ = cabbit_db.get_all()
+        alive = [(uid, c) for uid, c in all_.items() if not c.get("dead") and not c.get("banned")]
+        if not alive:
+            await update.message.reply_text("Нет живых кеббитов для бана.")
+            return
+        lines = ["🔨 <b>Живые кеббиты:</b>\n"]
+        for uid, c in alive:
+            evo = get_evolution(c["level"])
+            lines.append(
+                f"  {evo['emoji']} <b>{c['name']}</b> — ур. {c['level']} "
+                f"(владелец: <code>{uid}</code>)"
+            )
+        lines.append(f"\n<i>Использование: /bancabbit &lt;user_id&gt; &lt;причина&gt;</i>")
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        return
+
+    target_uid = args[1].strip()
+    reason = args[2].strip()
+
+    target_cab = cabbit_db.get(target_uid)
+    if not target_cab:
+        await update.message.reply_text(f"❌ Кеббит с uid <code>{target_uid}</code> не найден.", parse_mode="HTML")
+        return
+    if target_cab.get("dead"):
+        await update.message.reply_text("❌ Этот кеббит уже мёртв.")
+        return
+    if target_cab.get("banned"):
+        await update.message.reply_text("❌ Этот кеббит уже забанен.")
+        return
+
+    target_name = target_cab.get("name", "Кеббит")
+
+    # Баним: помечаем как dead + banned + причина
+    target_cab["dead"] = True
+    target_cab["banned"] = True
+    target_cab["ban_reason"] = reason
+    target_cab["banned_by"] = caller
+    target_cab["banned_at"] = int(time.time())
+    cabbit_db.save_cabbit(target_uid, target_cab)
+
+    # Уведомляем владельца
+    try:
+        await ctx.application.bot.send_message(
+            chat_id=int(target_uid),
+            text=(
+                f"🔨 <b>{target_name} был забанен администратором!</b>\n\n"
+                f"Причина: <i>{reason}</i>\n\n"
+                f"Напиши /cabbit чтобы завести нового."
+            ),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.warning(f"bancabbit notify uid={target_uid}: {e}")
+
+    await update.message.reply_text(
+        f"🔨 <b>Кеббит «{target_name}» (владелец {target_uid}) забанен.</b>\n"
+        f"Причина: <i>{reason}</i>",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_cabbitlist(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    /cabbitlist — только для админа.
+    Показывает всех кеббитов с uid владельцев, уровнем, статусом.
+    """
+    from config import ADMIN_ID
+
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Только администратор может использовать эту команду.")
+        return
+
+    all_ = cabbit_db.get_all()
+    if not all_:
+        await update.message.reply_text("Кеббитов пока нет.")
+        return
+
+    lines = ["📋 <b>Все кеббиты (админ):</b>\n"]
+    for uid, c in all_.items():
+        evo = get_evolution(c.get("level", 1))
+        status_parts = []
+        if c.get("dead") and c.get("banned"):
+            status_parts.append(f"🔨 забанен: {c.get('ban_reason', '—')}")
+        elif c.get("dead"):
+            status_parts.append("💀 мёртв")
+        else:
+            status_parts.append("✅ жив")
+        if c.get("has_knife"):
+            status_parts.append("🔪")
+        if c.get("sick"):
+            status_parts.append("🤒")
+
+        stars = c.get("prestige_stars", 0)
+        stars_str = f" {'⭐' * stars}" if stars > 0 else ""
+        status = " | ".join(status_parts)
+
+        lines.append(
+            f"{evo['emoji']} <b>{c.get('name', '?')}</b>{stars_str} — "
+            f"ур. {c.get('level', 1)} ({c.get('xp', 0)} XP)\n"
+            f"   👤 ID: <code>{uid}</code> | {status}"
+        )
+
+    # Telegram лимит 4096 символов — разбиваем если надо
+    text = "\n".join(lines)
+    if len(text) <= 4000:
+        await update.message.reply_text(text, parse_mode="HTML")
+    else:
+        # Отправляем частями
+        chunk_lines = [lines[0]]
+        for line in lines[1:]:
+            test = "\n".join(chunk_lines + [line])
+            if len(test) > 4000:
+                await update.message.reply_text("\n".join(chunk_lines), parse_mode="HTML")
+                chunk_lines = [line]
+            else:
+                chunk_lines.append(line)
+        if chunk_lines:
+            await update.message.reply_text("\n".join(chunk_lines), parse_mode="HTML")
 
 
 async def cmd_leaderboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

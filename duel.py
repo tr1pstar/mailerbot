@@ -365,7 +365,7 @@ async def _resolve_round(app, challenger: str, target_uid: str, duel: dict):
 
 
 async def _finish_duel(app, challenger: str, target_uid: str, duel: dict, last_text: str):
-    from cabbit import cabbit_db
+    from cabbit import cabbit_db, apply_xp
     _pop_duel(challenger)
 
     stake = duel.get("stake", 100)
@@ -392,7 +392,7 @@ async def _finish_duel(app, challenger: str, target_uid: str, duel: dict, last_t
         winner_uid, loser_uid = target_uid, challenger
         winner_cab, loser_cab = t_cab, c_cab
 
-    winner_cab["xp"] = winner_cab.get("xp", 0) + stake
+    apply_xp(winner_cab, stake)
     loser_cab["xp"]  = max(0, loser_cab.get("xp", 0) - stake)
 
     # Stats
@@ -412,7 +412,7 @@ async def _finish_duel(app, challenger: str, target_uid: str, duel: dict, last_t
     new_achs = check_achievements(winner_cab)
     if new_achs:
         bonus = unlock_achievements(winner_cab, new_achs)
-        winner_cab["xp"] += bonus
+        apply_xp(winner_cab, bonus)
         ach_text_w = f"\n\n{'━' * 20}\n🏆 <b>ДОСТИЖЕНИЕ РАЗБЛОКИРОВАНО!</b>"
         for a in new_achs:
             ach_text_w += f"\n  {a['emoji']} <b>{a['name']}</b> — {a['desc']}\n  💰 +{a['reward']} XP"
