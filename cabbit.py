@@ -544,6 +544,7 @@ async def cmd_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     check_sickness(cabbit)
     cabbit_db.save_cabbit(uid, cabbit)
+    await update.message.reply_text("🐰", reply_markup=get_reply_keyboard())
     await _send_cabbit_card(update.message, cabbit)
     return ConversationHandler.END
 
