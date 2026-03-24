@@ -29,6 +29,7 @@ from cabbit import (
     cmd_prestige, callback_use_item, cmd_bancabbit, cmd_cabbitlist,
     cmd_broadcast, cmd_addxp,
     cmd_skins, callback_skin_select, cmd_shop, callback_shop_buy,
+    callback_shop_confirm, callback_shop_back,
     cmd_profile,
     cmd_addskin, handle_addskin_photo, cmd_skindrop, cmd_skinlevel, cmd_skinprice,
     cmd_removeskin, cmd_giveskin, cmd_addcoins, cmd_listskins,
@@ -843,7 +844,9 @@ def main() -> None:
     app.add_handler(CommandHandler("shop",         cmd_shop))
     app.add_handler(CommandHandler("profile",      cmd_profile))
     app.add_handler(CallbackQueryHandler(callback_skin_select, pattern=r"^skin_sel:"))
-    app.add_handler(CallbackQueryHandler(callback_shop_buy,    pattern=r"^shop_buy:"))
+    app.add_handler(CallbackQueryHandler(callback_shop_buy,     pattern=r"^shop_buy:"))
+    app.add_handler(CallbackQueryHandler(callback_shop_confirm, pattern=r"^shop_confirm:"))
+    app.add_handler(CallbackQueryHandler(callback_shop_back,    pattern=r"^shop:"))
     # Skins — admin
     app.add_handler(CommandHandler("addskin",      cmd_addskin))
     app.add_handler(MessageHandler(filters.PHOTO, handle_addskin_photo), group=2)

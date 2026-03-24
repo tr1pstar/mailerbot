@@ -421,19 +421,36 @@ async def _finish_duel(app, challenger: str, target_uid: str, duel: dict, last_t
     cabbit_db.save_cabbit(winner_uid, winner_cab)
     cabbit_db.save_cabbit(loser_uid, loser_cab)
 
+    from cabbit import get_cabbit_photo
+    winner_photo = get_cabbit_photo(winner_cab)
+
+    win_text = last_text + f"\n🏆 <b>{winner_cab['name']} победил!</b>\n✨ +{stake} XP{ach_text_w}"
+    lose_text = last_text + f"\n💀 <b>{loser_cab['name']} проиграл!</b>\n💔 -{stake} XP"
+
+    # Winner notification
     try:
-        await app.bot.send_message(
-            chat_id=int(winner_uid),
-            text=last_text + f"\n🏆 <b>{winner_cab['name']} победил!</b>\n✨ +{stake} XP{ach_text_w}",
-            parse_mode="HTML",
-        )
+        if winner_photo:
+            await app.bot.send_photo(
+                chat_id=int(winner_uid), photo=winner_photo,
+                caption=win_text, parse_mode="HTML",
+            )
+        else:
+            await app.bot.send_message(
+                chat_id=int(winner_uid), text=win_text, parse_mode="HTML",
+            )
     except Exception as e:
         logger.warning(f"finish winner: {e}")
+
+    # Loser notification — show winner's skin so they see who beat them
     try:
-        await app.bot.send_message(
-            chat_id=int(loser_uid),
-            text=last_text + f"\n💀 <b>{loser_cab['name']} проиграл!</b>\n💔 -{stake} XP",
-            parse_mode="HTML",
-        )
+        if winner_photo:
+            await app.bot.send_photo(
+                chat_id=int(loser_uid), photo=winner_photo,
+                caption=lose_text, parse_mode="HTML",
+            )
+        else:
+            await app.bot.send_message(
+                chat_id=int(loser_uid), text=lose_text, parse_mode="HTML",
+            )
     except Exception as e:
         logger.warning(f"finish loser: {e}")

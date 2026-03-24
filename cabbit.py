@@ -1642,6 +1642,7 @@ async def cmd_shop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def callback_shop_buy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Первый клик — показать превью скина с фото и кнопкой подтверждения."""
     q       = update.callback_query
     await q.answer()
     uid     = str(q.from_user.id)
@@ -1654,6 +1655,72 @@ async def callback_shop_buy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     s = skin_db.get(skin_id)
     if not s or s.get("shop_price") is None:
         await q.answer("Этот скин не продаётся!", show_alert=True)
+        return
+
+    r_em   = SkinStorage.RARITY_EMOJI.get(s.get("rarity", "common"), "⚪")
+    price  = s["shop_price"]
+    coins  = cabbit.get("coins", 0)
+    owned  = skin_id in cabbit.get("skins", [])
+
+    if owned:
+        text = (
+            f"{r_em} <b>{s['display_name']}</b>\n"
+            f"Редкость: {s.get('rarity', 'common')}\n\n"
+            f"✅ У тебя уже есть этот скин!"
+        )
+        buttons = [[InlineKeyboardButton("◀️ Назад в магазин", callback_data="shop:back")]]
+    elif coins >= price:
+        text = (
+            f"{r_em} <b>{s['display_name']}</b>\n"
+            f"Редкость: {s.get('rarity', 'common')}\n"
+            f"Цена: <b>{price} 🪙</b>\n"
+            f"Баланс: <b>{coins} 🪙</b>\n\n"
+            f"Купить этот скин?"
+        )
+        buttons = [
+            [InlineKeyboardButton(f"✅ Купить за {price} 🪙", callback_data=f"shop_confirm:{skin_id}")],
+            [InlineKeyboardButton("◀️ Назад в магазин", callback_data="shop:back")],
+        ]
+    else:
+        text = (
+            f"{r_em} <b>{s['display_name']}</b>\n"
+            f"Редкость: {s.get('rarity', 'common')}\n"
+            f"Цена: <b>{price} 🪙</b>\n"
+            f"Баланс: <b>{coins} 🪙</b>\n\n"
+            f"❌ Не хватает <b>{price - coins} 🪙</b>"
+        )
+        buttons = [[InlineKeyboardButton("◀️ Назад в магазин", callback_data="shop:back")]]
+
+    kb = InlineKeyboardMarkup(buttons)
+    file_id = s.get("file_id")
+
+    # Отправляем новое сообщение с фото скина
+    try:
+        if file_id:
+            await q.message.reply_photo(
+                photo=file_id, caption=text,
+                parse_mode="HTML", reply_markup=kb,
+            )
+        else:
+            await q.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        await q.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+
+
+async def callback_shop_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение покупки — списываем монеты и выдаём скин."""
+    q       = update.callback_query
+    await q.answer()
+    uid     = str(q.from_user.id)
+    skin_id = q.data.split(":")[1]
+    cabbit  = cabbit_db.get(uid)
+    if not cabbit or cabbit.get("dead"):
+        await q.answer("❌ Кеббит не найден.", show_alert=True)
+        return
+
+    s = skin_db.get(skin_id)
+    if not s or s.get("shop_price") is None:
+        await q.answer("Скин не продаётся!", show_alert=True)
         return
 
     if skin_id in cabbit.get("skins", []):
@@ -1671,12 +1738,67 @@ async def callback_shop_buy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cabbit_db.save_cabbit(uid, cabbit)
 
     r_em = SkinStorage.RARITY_EMOJI.get(s.get("rarity", "common"), "⚪")
-    await q.edit_message_text(
-        f"✅ Куплен скин: {r_em} <b>{s['display_name']}</b>\n"
-        f"🪙 -{price} монет (осталось: {cabbit['coins']})\n\n"
-        f"Выбрать: /skins",
-        parse_mode="HTML",
-    )
+    try:
+        await q.edit_message_caption(
+            caption=(
+                f"✅ Куплен: {r_em} <b>{s['display_name']}</b>\n"
+                f"🪙 -{price} монет (осталось: {cabbit['coins']})\n\n"
+                f"Выбрать: /skins"
+            ),
+            parse_mode="HTML",
+        )
+    except Exception:
+        try:
+            await q.edit_message_text(
+                f"✅ Куплен: {r_em} <b>{s['display_name']}</b>\n"
+                f"🪙 -{price} монет (осталось: {cabbit['coins']})\n\n"
+                f"Выбрать: /skins",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+
+async def callback_shop_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Возврат в магазин из превью."""
+    q   = update.callback_query
+    await q.answer()
+    uid = str(q.from_user.id)
+    cabbit = cabbit_db.get(uid)
+    if not cabbit or cabbit.get("dead"):
+        return
+
+    shop   = skin_db.get_shop()
+    owned  = cabbit.get("skins", [])
+    coins  = cabbit.get("coins", 0)
+
+    if not shop:
+        try:
+            await q.edit_message_text("🏪 Магазин пуст.")
+        except Exception:
+            pass
+        return
+
+    lines   = [f"🏪 <b>Магазин скинов</b>\n🪙 Баланс: <b>{coins}</b> монет\n"]
+    buttons = []
+
+    for s_id, s in shop:
+        r_em  = SkinStorage.RARITY_EMOJI.get(s.get("rarity", "common"), "⚪")
+        price = s["shop_price"]
+        if s_id in owned:
+            lines.append(f"  {r_em} <b>{s['display_name']}</b> — ✅ куплено")
+        else:
+            lines.append(f"  {r_em} <b>{s['display_name']}</b> — 🪙 {price}")
+            buttons.append([InlineKeyboardButton(
+                f"🪙 {price} — {s['display_name']}",
+                callback_data=f"shop_buy:{s_id}"
+            )])
+
+    kb = InlineKeyboardMarkup(buttons) if buttons else None
+    try:
+        await q.message.reply_text("\n".join(lines), parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        pass
 
 
 async def cmd_profile(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
