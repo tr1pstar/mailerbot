@@ -71,6 +71,14 @@ SICKNESS_CHANCE   = 5
 SICKNESS_DURATION = 6 * 3600
 RAID_COOLDOWN     = 2 * 3600
 
+RULES_TEXT = (
+    "📜 <b>Правила игры «Кеббит»</b>\n\n"
+    "1. 🚫 <b>Запрещены мультиаккаунты.</b>\n"
+    "   Один человек — один кеббит. Использование нескольких аккаунтов "
+    "для получения преимуществ приведёт к бану кеббита.\n\n"
+    "Нажми <b>✅ Принимаю</b> чтобы продолжить."
+)
+
 
 def xp_for_level(level: int) -> int:
     return int(100 * (level ** 1.6))
@@ -328,29 +336,95 @@ async def cmd_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cabbit = cabbit_db.get(uid)
 
     if not cabbit:
-        await update.message.reply_text(
-            "🐰 У тебя ещё нет кеббита!\n\nКак ты хочешь его назвать?"
-        )
-        return NAMING_STATE
+        # Новый игрок — показываем правила
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Принимаю", callback_data="rules:accept")],
+        ])
+        await update.message.reply_text(RULES_TEXT, parse_mode="HTML", reply_markup=kb)
+        return ConversationHandler.END
 
     if cabbit.get("dead"):
         name = cabbit.get("name", "Кеббит")
         await update.message.reply_text(
             f"💀 <b>{name} умер от голода...</b>\n\n"
-            f"Ты не кормил его 24 часа. Кеббит ушёл в лучший мир.\n\n"
-            f"Хочешь завести нового? Напиши имя:",
+            f"Ты не кормил его 24 часа. Кеббит ушёл в лучший мир.",
             parse_mode="HTML",
         )
         with cabbit_db._lock:
             data = cabbit_db._load()
             data.pop(uid, None)
             cabbit_db._save(data)
-        return NAMING_STATE
+        # Заводит нового — правила заново
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Принимаю", callback_data="rules:accept")],
+        ])
+        await update.message.reply_text(RULES_TEXT, parse_mode="HTML", reply_markup=kb)
+        return ConversationHandler.END
+
+    # Существующий живой кеббит — проверяем принял ли правила
+    if not cabbit.get("rules_accepted"):
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Принимаю", callback_data="rules:accept")],
+        ])
+        await update.message.reply_text(RULES_TEXT, parse_mode="HTML", reply_markup=kb)
+        return ConversationHandler.END
 
     check_sickness(cabbit)
     cabbit_db.save_cabbit(uid, cabbit)
     await _send_cabbit_card(update.message, cabbit)
     return ConversationHandler.END
+
+
+async def callback_rules(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Кнопка ✅ Принимаю — принять правила."""
+    q   = update.callback_query
+    await q.answer()
+    uid = str(q.from_user.id)
+
+    cabbit = cabbit_db.get(uid)
+
+    if cabbit and not cabbit.get("dead"):
+        # Существующий игрок — просто отмечаем и показываем карточку
+        cabbit["rules_accepted"] = True
+        check_sickness(cabbit)
+        cabbit_db.save_cabbit(uid, cabbit)
+        await q.edit_message_text("✅ Правила приняты!")
+        await _send_cabbit_card(q.message, cabbit)
+        return
+
+    # Новый или dead — нужно имя
+    await q.edit_message_text(
+        "✅ Правила приняты!\n\n"
+        "🐰 Как ты хочешь назвать своего кеббита?"
+    )
+    # Запускаем ConversationHandler вручную не получится —
+    # поэтому ставим флаг и ловим следующее текстовое сообщение через отдельный хендлер
+    ctx.user_data["awaiting_cabbit_name"] = True
+
+
+async def receive_name_from_rules(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Ловит имя после принятия правил через callback (вне ConversationHandler)."""
+    if not ctx.user_data.get("awaiting_cabbit_name"):
+        return  # не наш случай
+    ctx.user_data.pop("awaiting_cabbit_name", None)
+
+    uid  = str(update.effective_user.id)
+    name = update.message.text.strip()[:20]
+    if not name:
+        await update.message.reply_text("Имя не может быть пустым. Напиши /cabbit чтобы начать заново.")
+        return
+
+    cabbit = cabbit_db.create(uid, name)
+    cabbit["rules_accepted"] = True
+    cabbit_db.save_cabbit(uid, cabbit)
+    await update.message.reply_text(
+        f"🎉 Познакомьтесь — <b>{name}</b>!\n\n"
+        f"Каждые 30 минут появляется коробка с едой — не забывай кормить!\n"
+        f"⚠️ Если не кормить 24 часа — кеббит умрёт.\n\n"
+        f"Новые команды: /casino, /raid, /quests, /achievements",
+        parse_mode="HTML",
+    )
+    await _send_cabbit_card(update.message, cabbit)
 
 
 async def receive_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -362,6 +436,8 @@ async def receive_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return NAMING_STATE
 
     cabbit = cabbit_db.create(uid, name)
+    cabbit["rules_accepted"] = True
+    cabbit_db.save_cabbit(uid, cabbit)
     await update.message.reply_text(
         f"🎉 Познакомьтесь — <b>{name}</b>!\n\n"
         f"Каждые 30 минут появляется коробка с едой — не забывай кормить!\n"
@@ -1115,6 +1191,52 @@ async def cmd_cabbitlist(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 chunk_lines.append(line)
         if chunk_lines:
             await update.message.reply_text("\n".join(chunk_lines), parse_mode="HTML")
+
+
+# ─── Админ: рассылка ─────────────────────────────────────────────────────────
+
+async def cmd_broadcast(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    /broadcast <текст>
+    Отправляет сообщение всем пользователям бота (у кого есть кеббит).
+    Только для админа.
+    """
+    from config import ADMIN_ID
+
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Только администратор может делать рассылку.")
+        return
+
+    text = (update.message.text or "").split(maxsplit=1)
+    if len(text) < 2 or not text[1].strip():
+        await update.message.reply_text(
+            "Использование: /broadcast <текст сообщения>\n\n"
+            "Сообщение получат все пользователи у которых есть (или был) кеббит."
+        )
+        return
+
+    message_text = text[1].strip()
+    all_ = cabbit_db.get_all()
+    sent = 0
+    failed = 0
+
+    for uid in all_:
+        try:
+            await ctx.application.bot.send_message(
+                chat_id=int(uid),
+                text=f"📢 <b>Объявление:</b>\n\n{message_text}",
+                parse_mode="HTML",
+            )
+            sent += 1
+        except Exception as e:
+            logger.warning(f"broadcast to {uid} failed: {e}")
+            failed += 1
+
+    await update.message.reply_text(
+        f"📢 Рассылка завершена.\n"
+        f"✅ Доставлено: {sent}\n"
+        f"❌ Не доставлено: {failed}"
+    )
 
 
 async def cmd_leaderboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

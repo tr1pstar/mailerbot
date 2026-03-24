@@ -23,9 +23,11 @@ from telegram.ext import (
 from config import BOT_TOKEN, ZOHO_EMAIL, ZOHO_PASSWORD, ZOHO_DOMAIN, ZOHO_IMAP_HOST
 from storage import Storage
 from cabbit import (
-    cmd_cabbit, receive_name, cancel, callback_cabbit,
+    cmd_cabbit, receive_name, receive_name_from_rules, cancel,
+    callback_cabbit, callback_rules,
     callback_kill, cmd_knife, cmd_leaderboard, cmd_raid,
     cmd_prestige, callback_use_item, cmd_bancabbit, cmd_cabbitlist,
+    cmd_broadcast,
     box_notifier, NAMING_STATE, cabbit_db,
 )
 from duel import (
@@ -812,6 +814,8 @@ def main() -> None:
         fallbacks=[CommandHandler("cancel", cancel)],
     )
     app.add_handler(cabbit_conv)
+    app.add_handler(CallbackQueryHandler(callback_rules,   pattern=r"^rules:"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name_from_rules), group=1)
     app.add_handler(CallbackQueryHandler(callback_cabbit,  pattern=r"^cabbit:"))
     app.add_handler(CallbackQueryHandler(callback_kill,         pattern=r"^kill:"))
     app.add_handler(CallbackQueryHandler(callback_duel_send,    pattern=r"^duel_send:"))
@@ -828,6 +832,7 @@ def main() -> None:
     app.add_handler(CommandHandler("prestige",     cmd_prestige))
     app.add_handler(CommandHandler("bancabbit",    cmd_bancabbit))
     app.add_handler(CommandHandler("cabbitlist",   cmd_cabbitlist))
+    app.add_handler(CommandHandler("broadcast",    cmd_broadcast))
     app.add_handler(CommandHandler("promo",        cmd_promo))
     app.add_handler(CommandHandler("createpromo",  cmd_createpromo))
     app.add_handler(CommandHandler("listpromos",   cmd_listpromos))
