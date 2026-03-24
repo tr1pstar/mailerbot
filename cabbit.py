@@ -1134,6 +1134,82 @@ async def cmd_bancabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_addxp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    /addxp <user_id> <кол-во> <причина>
+    Админ начисляет XP игроку с описанием.
+    """
+    from config import ADMIN_ID
+
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Только администратор может начислять XP.")
+        return
+
+    args = (update.message.text or "").split(maxsplit=3)
+    if len(args) < 4:
+        await update.message.reply_text(
+            "Использование: /addxp <user_id> <кол-во XP> <причина>\n\n"
+            "Пример: /addxp 123456789 500 Компенсация за баг с дуэлями"
+        )
+        return
+
+    target_uid = args[1].strip()
+    try:
+        amount = int(args[2].strip())
+    except ValueError:
+        await update.message.reply_text("❌ Количество XP должно быть числом.")
+        return
+    reason = args[3].strip()
+
+    if amount == 0:
+        await update.message.reply_text("❌ Количество XP не может быть 0.")
+        return
+
+    cabbit = cabbit_db.get(target_uid)
+    if not cabbit:
+        await update.message.reply_text(f"❌ Кеббит с uid <code>{target_uid}</code> не найден.", parse_mode="HTML")
+        return
+    if cabbit.get("dead"):
+        await update.message.reply_text("❌ Этот кеббит мёртв.")
+        return
+
+    name = cabbit.get("name", "Кеббит")
+    old_level = cabbit.get("level", 1)
+
+    if amount > 0:
+        leveled, new_level = apply_xp(cabbit, amount)
+    else:
+        cabbit["xp"] = max(0, cabbit.get("xp", 0) + amount)
+        new_level = cabbit.get("level", 1)
+        leveled = False
+
+    cabbit_db.save_cabbit(target_uid, cabbit)
+
+    sign = "+" if amount > 0 else ""
+    level_text = f"\n📈 Уровень: {old_level} → {new_level}" if leveled else ""
+
+    # Уведомляем игрока
+    try:
+        await ctx.application.bot.send_message(
+            chat_id=int(target_uid),
+            text=(
+                f"🎁 <b>Начисление от администратора</b>\n\n"
+                f"💰 <b>{sign}{amount} XP</b>\n"
+                f"📝 Причина: <i>{reason}</i>{level_text}\n\n"
+                f"{cabbit_status(cabbit)}"
+            ),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.warning(f"addxp notify uid={target_uid}: {e}")
+
+    await update.message.reply_text(
+        f"✅ <b>{sign}{amount} XP</b> начислено кеббиту «{name}» (владелец <code>{target_uid}</code>)\n"
+        f"Причина: <i>{reason}</i>{level_text}",
+        parse_mode="HTML",
+    )
+
+
 async def cmd_cabbitlist(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
     /cabbitlist — только для админа.

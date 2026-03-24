@@ -27,7 +27,7 @@ from cabbit import (
     callback_cabbit, callback_rules,
     callback_kill, cmd_knife, cmd_leaderboard, cmd_raid,
     cmd_prestige, callback_use_item, cmd_bancabbit, cmd_cabbitlist,
-    cmd_broadcast,
+    cmd_broadcast, cmd_addxp,
     box_notifier, NAMING_STATE, cabbit_db,
 )
 from duel import (
@@ -833,6 +833,7 @@ def main() -> None:
     app.add_handler(CommandHandler("bancabbit",    cmd_bancabbit))
     app.add_handler(CommandHandler("cabbitlist",   cmd_cabbitlist))
     app.add_handler(CommandHandler("broadcast",    cmd_broadcast))
+    app.add_handler(CommandHandler("addxp",        cmd_addxp))
     app.add_handler(CommandHandler("promo",        cmd_promo))
     app.add_handler(CommandHandler("createpromo",  cmd_createpromo))
     app.add_handler(CommandHandler("listpromos",   cmd_listpromos))
