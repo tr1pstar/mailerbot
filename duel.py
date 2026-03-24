@@ -59,38 +59,6 @@ def _move_kb(challenger_uid: str) -> InlineKeyboardMarkup:
     ]])
 
 
-async def show_duel_targets(q, uid: str, cabbit_db, edit_card_fn):
-    all_   = cabbit_db.get_all()
-    others = [(u, c) for u, c in all_.items() if u != uid and not c.get("dead")]
-    if not others:
-        await q.answer("Нет других живых кеббитов!", show_alert=True)
-        return
-
-    buttons = [
-        [InlineKeyboardButton(
-            f"🐰 {c['name']} (ур. {c['level']}) — {c['xp']} XP",
-            callback_data=f"duel_send:{u}",
-        )]
-        for u, c in others
-    ]
-    buttons.append([InlineKeyboardButton("❌ Отмена", callback_data="duel_send:cancel")])
-    text = (
-        "🥊 <b>Выбери противника для дуэли</b>\n\n"
-        "Ставка: <b>500 XP</b> | Формат: Best of 3\n"
-        "Камень-Ножницы-Бумага"
-    )
-    try:
-        await q.edit_message_caption(
-            caption=text, parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(buttons),
-        )
-    except Exception:
-        await q.edit_message_text(
-            text, parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(buttons),
-        )
-
-
 async def callback_duel_send(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Шаг 1: выбрали противника → показываем выбор ставки."""
     from cabbit import cabbit_db, _edit_card
@@ -215,6 +183,12 @@ async def callback_duel_stake(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.warning(f"duel invite: {e}")
+        _pop_duel(challenger)
+        c_cab["duel_tokens"] = c_cab.get("duel_tokens", 0) + 1
+        cabbit_db.save_cabbit(challenger, c_cab)
+        confirm = f"❌ Не удалось отправить вызов. Жетон возвращён."
+        await _edit_card(q, c_cab, confirm)
+        return
 
     confirm = f"✅ Вызов отправлен <b>{t_cab['name']}</b>! Ставка: <b>{stake} XP</b>\n\n{cabbit_status(c_cab)}"
     await _edit_card(q, c_cab, confirm)
@@ -238,6 +212,14 @@ async def callback_duel_accept(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     c_cab = cabbit_db.get(challenger)
     t_cab = cabbit_db.get(target_uid)
+    if not c_cab or c_cab.get("dead") or not t_cab or t_cab.get("dead"):
+        _pop_duel(challenger)
+        c_cab_tmp = cabbit_db.get(challenger)
+        if c_cab_tmp:
+            c_cab_tmp["duel_tokens"] = c_cab_tmp.get("duel_tokens", 0) + 1
+            cabbit_db.save_cabbit(challenger, c_cab_tmp)
+        await q.edit_message_text("❌ Дуэль отменена — кеббит не найден или мёртв.")
+        return
     stake = duel.get("stake", 100)
     text  = (
         f"⚔️ <b>{c_cab['name']} vs {t_cab['name']}</b>\n\n"

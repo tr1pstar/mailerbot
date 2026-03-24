@@ -91,7 +91,8 @@ async def cmd_casino(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     new_achs = check_achievements(cabbit)
     if new_achs:
         bonus = unlock_achievements(cabbit, new_achs)
-        cabbit["xp"] = cabbit.get("xp", 0) + bonus
+        from cabbit import apply_xp as _apply_xp
+        _apply_xp(cabbit, bonus)
         text += f"\n\n{'━' * 20}\n🏆 <b>ДОСТИЖЕНИЕ РАЗБЛОКИРОВАНО!</b>"
         for a in new_achs:
             text += f"\n  {a['emoji']} <b>{a['name']}</b> — {a['desc']}\n  💰 +{a['reward']} XP"

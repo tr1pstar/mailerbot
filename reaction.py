@@ -101,7 +101,7 @@ async def callback_reaction(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         _event["winner_uid"] = uid
         _event["active"] = False
         reward = _event["reward"]
-        apply_xp(cabbit, reward)
+        leveled, new_level = apply_xp(cabbit, reward)
         stats = cabbit.setdefault("stats", {})
         stats["xp_earned_total"] = stats.get("xp_earned_total", 0) + reward
 
@@ -109,7 +109,8 @@ async def callback_reaction(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ach_text = ""
         if new_achs:
             bonus = unlock_achievements(cabbit, new_achs)
-            cabbit["xp"] += bonus
+            from cabbit import apply_xp as _apply_xp
+            _apply_xp(cabbit, bonus)
             ach_text = f"\n\n{'━' * 20}\n🏆 <b>ДОСТИЖЕНИЕ РАЗБЛОКИРОВАНО!</b>"
             for a in new_achs:
                 ach_text += f"\n  {a['emoji']} <b>{a['name']}</b> — {a['desc']}\n  💰 +{a['reward']} XP"
@@ -117,19 +118,21 @@ async def callback_reaction(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         cabbit_db.save_cabbit(uid, cabbit)
         elapsed = time.time() - _event["ts"]
+        lvl_str = f"\n🎉 <b>УРОВЕНЬ {new_level}!</b>" if leveled else ""
         await q.edit_message_text(
             f"⚡️ <b>ПОБЕДА!</b>\n\n"
             f"Реакция: <b>{elapsed:.1f}с</b>\n"
-            f"💰 +{reward} XP{ach_text}",
+            f"💰 +{reward} XP{lvl_str}{ach_text}",
             parse_mode="HTML",
         )
     else:
         reward = SMALL_REWARD
-        apply_xp(cabbit, reward)
+        leveled2, new_level2 = apply_xp(cabbit, reward)
         stats = cabbit.setdefault("stats", {})
         stats["xp_earned_total"] = stats.get("xp_earned_total", 0) + reward
         cabbit_db.save_cabbit(uid, cabbit)
+        lvl_str2 = f"\n🎉 УРОВЕНЬ {new_level2}!" if leveled2 else ""
         await q.edit_message_text(
-            f"⚡️ Не первый... но +{reward} XP за участие!",
+            f"⚡️ Не первый... но +{reward} XP за участие!{lvl_str2}",
             parse_mode="HTML",
         )

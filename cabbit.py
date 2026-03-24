@@ -79,12 +79,12 @@ RULES_TEXT = (
     "Нажми <b>✅ Принимаю</b> чтобы продолжить."
 )
 
-REPLY_KB_LABELS = {"🐰 Кеббит", "🎰 Казино", "🏴‍☠️ Рейд", "📋 Квесты", "🏪 Магазин", "📊 Топ"}
+REPLY_KB_LABELS = {"🐰 Кеббит", "🎰 Казино", "⚔️ Бой", "📋 Квесты", "🏪 Магазин", "📊 Топ"}
 
 
 def get_reply_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        [["🐰 Кеббит", "🎰 Казино", "🏴‍☠️ Рейд"],
+        [["🐰 Кеббит", "🎰 Казино", "⚔️ Бой"],
          ["📋 Квесты", "🏪 Магазин", "📊 Топ"]],
         resize_keyboard=True,
     )
@@ -474,10 +474,7 @@ def cabbit_keyboard(cabbit: dict) -> InlineKeyboardMarkup:
     if box_avail:
         buttons.append([InlineKeyboardButton("📦 Открыть коробку", callback_data="cabbit:box")])
 
-    buttons.append([
-        InlineKeyboardButton("🎒 Инвентарь", callback_data="cabbit:inventory"),
-        InlineKeyboardButton("⚔️ Бой", callback_data="cabbit:fight"),
-    ])
+    buttons.append([InlineKeyboardButton("🎒 Инвентарь", callback_data="cabbit:inventory")])
     buttons.append([
         InlineKeyboardButton("🎨 Скины", callback_data="cabbit:skins"),
         InlineKeyboardButton("🏆 Ачивки", callback_data="cabbit:achievements"),
@@ -547,6 +544,7 @@ async def cmd_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     check_sickness(cabbit)
     cabbit_db.save_cabbit(uid, cabbit)
+    await update.message.reply_text("🐰", reply_markup=get_reply_keyboard())
     await _send_cabbit_card(update.message, cabbit)
     return ConversationHandler.END
 
@@ -587,7 +585,7 @@ async def receive_name_from_rules(update: Update, ctx: ContextTypes.DEFAULT_TYPE
     ctx.user_data.pop("awaiting_cabbit_name", None)
 
     uid  = str(update.effective_user.id)
-    name = update.message.text.strip()[:20]
+    name = update.message.text.strip()[:20].replace("<", "").replace(">", "").replace("&", "")
     if not name:
         await update.message.reply_text("Имя не может быть пустым. Напиши /cabbit чтобы начать заново.")
         return
@@ -608,7 +606,7 @@ async def receive_name_from_rules(update: Update, ctx: ContextTypes.DEFAULT_TYPE
 
 async def receive_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid  = str(update.effective_user.id)
-    name = update.message.text.strip()[:20]
+    name = update.message.text.strip()[:20].replace("<", "").replace(">", "").replace("&", "")
 
     if not name or name in REPLY_KB_LABELS:
         await update.message.reply_text("Имя не может быть пустым, попробуй ещё раз:")
@@ -1085,8 +1083,8 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 stats["max_level"] = max(stats.get("max_level", 0), cabbit["level"])
                 text_parts.append(f"\n  Новый уровень: {cabbit['level']}!")
 
-        # Sickness roll
-        if not cabbit.get("sick") and random.randint(1, 100) <= SICKNESS_CHANCE:
+        # Sickness roll (только если получил еду, не нож)
+        if not got_knife and not cabbit.get("sick") and random.randint(1, 100) <= SICKNESS_CHANCE:
             cabbit["sick"] = True
             cabbit["sick_until"] = now + SICKNESS_DURATION
             text_parts.append("\n\n🤒 <b>О нет! Кеббит заболел!</b> XP снижен. Найди 💊 или жди 6ч.")
@@ -1182,6 +1180,7 @@ async def callback_casino_bet(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             text += f"🎉 <b>УРОВЕНЬ {new_level}!</b>\n"
     else:
         cabbit["xp"] = max(0, cabbit.get("xp", 0) - bet)
+        stats["casino_losses"] = stats.get("casino_losses", 0) + 1
         text = (
             f"🎰 [ {line} ]\n\n"
             f"😢 Проигрыш...\n"
@@ -1241,7 +1240,7 @@ async def _show_knife_targets(q, attacker_uid: str):
         await q.edit_message_text(
             "🔪 <b>Выбери жертву:</b>",
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(buttons),
+            reply_markup=kb,
         )
 
 
@@ -1510,7 +1509,9 @@ async def callback_use_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         stolen = random.randint(100, 300)
         stolen = min(stolen, t_cab.get("xp", 0))
         t_cab["xp"] = max(0, t_cab.get("xp", 0) - stolen)
-        apply_xp(cabbit, stolen)
+        leveled, new_level = apply_xp(cabbit, stolen)
+        stats = cabbit.setdefault("stats", {})
+        stats["xp_earned_total"] = stats.get("xp_earned_total", 0) + stolen
         cabbit_db.save_cabbit(t_uid, t_cab)
 
         try:
@@ -1522,9 +1523,10 @@ async def callback_use_item(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
+        lvl_str = f"\n🎉 <b>УРОВЕНЬ {new_level}!</b>" if leveled else ""
         text = (
             f"🧲 <b>Магнит!</b>\n\n"
-            f"Украл <b>{stolen} XP</b> у {t_cab['name']}!\n\n"
+            f"Украл <b>{stolen} XP</b> у {t_cab['name']}!{lvl_str}\n\n"
             f"{cabbit_status(cabbit)}"
         )
 
@@ -1908,7 +1910,11 @@ async def callback_skin_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if skin_id == "default":
         cabbit["skin"] = None
         cabbit_db.save_cabbit(uid, cabbit)
-        await q.edit_message_text("✅ Скин сброшен на стандартный.")
+        text = "✅ Скин сброшен на стандартный."
+        try:
+            await q.edit_message_caption(caption=text, parse_mode="HTML")
+        except Exception:
+            await q.edit_message_text(text, parse_mode="HTML")
         return
 
     if skin_id not in cabbit.get("skins", []):
@@ -1923,10 +1929,11 @@ async def callback_skin_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cabbit["skin"] = skin_id
     cabbit_db.save_cabbit(uid, cabbit)
     r_em = SkinStorage.RARITY_EMOJI.get(s.get("rarity", "common"), "⚪")
-    await q.edit_message_text(
-        f"✅ Скин изменён: {r_em} <b>{s['display_name']}</b>",
-        parse_mode="HTML",
-    )
+    text = f"✅ Скин изменён: {r_em} <b>{s['display_name']}</b>"
+    try:
+        await q.edit_message_caption(caption=text, parse_mode="HTML")
+    except Exception:
+        await q.edit_message_text(text, parse_mode="HTML")
 
 
 async def cmd_shop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2118,10 +2125,14 @@ async def callback_shop_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )])
 
     kb = InlineKeyboardMarkup(buttons) if buttons else None
+    text = "\n".join(lines)
     try:
-        await q.message.reply_text("\n".join(lines), parse_mode="HTML", reply_markup=kb)
+        await q.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=kb)
     except Exception:
-        pass
+        try:
+            await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            pass
 
 
 async def cmd_profile(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2524,8 +2535,29 @@ async def handle_reply_keyboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(buttons),
         )
 
-    elif text == "🏴‍☠️ Рейд":
-        await cmd_raid(update, ctx)
+    elif text == "⚔️ Бой":
+        cabbit = cabbit_db.get(uid)
+        if not cabbit or cabbit.get("dead"):
+            await update.message.reply_text("❌ Нет кеббита. /cabbit")
+            return
+        now = int(time.time())
+        buttons = []
+        raid_cd = cabbit.get("last_raid", 0) + RAID_COOLDOWN
+        if now >= raid_cd:
+            buttons.append([InlineKeyboardButton("🏴‍☠️ Рейд", callback_data="cabbit:raid")])
+        else:
+            left = raid_cd - now
+            buttons.append([InlineKeyboardButton(f"🏴‍☠️ Рейд (⏳ {left // 60}м)", callback_data="cabbit:raid")])
+        tokens = cabbit.get("duel_tokens", 0)
+        if tokens > 0:
+            buttons.append([InlineKeyboardButton(f"🥊 Дуэль (жетонов: {tokens})", callback_data="cabbit:duel")])
+        else:
+            buttons.append([InlineKeyboardButton("🥊 Дуэль (нет жетонов)", callback_data="cabbit:refresh")])
+        await update.message.reply_text(
+            "⚔️ <b>Бой</b>\n\n🏴‍☠️ Рейд — украсть XP (40% шанс)\n🥊 Дуэль — камень-ножницы-бумага",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
 
     elif text == "📋 Квесты":
         from quests import cmd_quests

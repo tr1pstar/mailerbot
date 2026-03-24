@@ -404,7 +404,6 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "  /inbox — читать письма\n"
         "  /remove — удалить почту\n",
         parse_mode="HTML",
-        reply_markup=get_reply_keyboard(),
     )
 
 
