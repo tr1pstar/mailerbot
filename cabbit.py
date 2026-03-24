@@ -1748,45 +1748,49 @@ async def _send_profile(msg, cabbit: dict):
 
 async def cmd_addskin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
-    Отправь фото с подписью: /addskin <id> <название> <редкость>
-    Редкость: common / rare / epic / legendary
+    Без фото: показывает инструкцию.
+    С фото: парсит подпись и добавляет скин.
     """
     from config import ADMIN_ID
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Только администратор.")
         return
 
-    photo = update.message.photo
-    if not photo:
-        await update.message.reply_text(
-            "📸 Отправь <b>фото</b> с подписью:\n"
-            "<code>/addskin id Название редкость</code>\n\n"
-            "Редкость: common / rare / epic / legendary\n"
-            "Пример: <code>/addskin fire_cat Огненный кот epic</code>",
-            parse_mode="HTML",
-        )
+    # Если вызвана как текстовая команда (без фото) — показать инструкцию
+    await update.message.reply_text(
+        "📸 Отправь <b>фото</b> с подписью:\n"
+        "<code>/addskin id Название редкость</code>\n\n"
+        "Редкость: common / rare / epic / legendary\n"
+        "Пример: <code>/addskin fire_cat Огненный кот epic</code>",
+        parse_mode="HTML",
+    )
+
+
+async def handle_addskin_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Ловит фото с подписью /addskin ... — добавляет скин."""
+    from config import ADMIN_ID
+    if update.effective_user.id != ADMIN_ID:
         return
 
     caption = (update.message.caption or "").strip()
-    parts   = caption.split(maxsplit=2)
-    # /addskin id Название редкость
-    if len(parts) < 3:
+    if not caption.lower().startswith("/addskin"):
+        return
+
+    photo = update.message.photo
+    if not photo:
+        return
+
+    # /addskin cowboy_cabbit Ковбой common
+    tokens = caption.split()[1:]  # всё после /addskin
+    if len(tokens) < 3:
         await update.message.reply_text(
             "Подпись должна быть: /addskin <id> <название> <редкость>\n"
             "Пример: /addskin fire_cat Огненный кот epic"
         )
         return
 
-    # Парсим: /addskin fire_cat Огненный кот epic
-    rest = parts[1:]  # ['fire_cat', 'Огненный кот epic']
-    # Первый токен — id, последний — редкость, остальное — название
-    tokens = caption.split()[1:]  # all tokens after /addskin
-    if len(tokens) < 3:
-        await update.message.reply_text("Нужно минимум: id, название (одно+ слово), редкость.")
-        return
-
-    skin_id  = tokens[0]
-    rarity   = tokens[-1].lower()
+    skin_id   = tokens[0]
+    rarity    = tokens[-1].lower()
     disp_name = " ".join(tokens[1:-1])
 
     if rarity not in ("common", "rare", "epic", "legendary"):
