@@ -24,7 +24,7 @@ from config import BOT_TOKEN, ZOHO_EMAIL, ZOHO_PASSWORD, ZOHO_DOMAIN, ZOHO_IMAP_
 from storage import Storage
 from cabbit import (
     cmd_cabbit, receive_name, receive_name_from_rules, cancel,
-    callback_cabbit, callback_rules,
+    callback_cabbit, callback_rules, callback_casino_bet,
     callback_kill, cmd_knife, cmd_leaderboard, cmd_raid,
     cmd_prestige, callback_use_item, cmd_bancabbit, cmd_cabbitlist,
     cmd_broadcast, cmd_addxp,
@@ -822,6 +822,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(callback_rules,   pattern=r"^rules:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name_from_rules), group=1)
     app.add_handler(CallbackQueryHandler(callback_cabbit,  pattern=r"^cabbit:"))
+    app.add_handler(CallbackQueryHandler(callback_casino_bet, pattern=r"^casino_bet:"))
     app.add_handler(CallbackQueryHandler(callback_kill,         pattern=r"^kill:"))
     app.add_handler(CallbackQueryHandler(callback_duel_send,    pattern=r"^duel_send:"))
     app.add_handler(CallbackQueryHandler(callback_duel_stake,   pattern=r"^duel_stake:"))
