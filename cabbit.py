@@ -79,12 +79,12 @@ RULES_TEXT = (
     "Нажми <b>✅ Принимаю</b> чтобы продолжить."
 )
 
-REPLY_KB_LABELS = {"🐰 Кеббит", "🎰 Казино", "🏴‍☠️ Рейд", "📋 Квесты", "🏪 Магазин", "📊 Топ"}
+REPLY_KB_LABELS = {"🐰 Кеббит", "🎰 Казино", "⚔️ Бой", "📋 Квесты", "🏪 Магазин", "📊 Топ"}
 
 
 def get_reply_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        [["🐰 Кеббит", "🎰 Казино", "🏴‍☠️ Рейд"],
+        [["🐰 Кеббит", "🎰 Казино", "⚔️ Бой"],
          ["📋 Квесты", "🏪 Магазин", "📊 Топ"]],
         resize_keyboard=True,
     )
@@ -476,9 +476,6 @@ def cabbit_keyboard(cabbit: dict) -> InlineKeyboardMarkup:
 
     buttons.append([
         InlineKeyboardButton("🎒 Инвентарь", callback_data="cabbit:inventory"),
-        InlineKeyboardButton("⚔️ Бой", callback_data="cabbit:fight"),
-    ])
-    buttons.append([
         InlineKeyboardButton("🎨 Скины", callback_data="cabbit:skins"),
         InlineKeyboardButton("🏆 Ачивки", callback_data="cabbit:achievements"),
     ])
@@ -1908,7 +1905,11 @@ async def callback_skin_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if skin_id == "default":
         cabbit["skin"] = None
         cabbit_db.save_cabbit(uid, cabbit)
-        await q.edit_message_text("✅ Скин сброшен на стандартный.")
+        text = "✅ Скин сброшен на стандартный."
+        try:
+            await q.edit_message_caption(caption=text, parse_mode="HTML")
+        except Exception:
+            await q.edit_message_text(text, parse_mode="HTML")
         return
 
     if skin_id not in cabbit.get("skins", []):
@@ -1923,10 +1924,11 @@ async def callback_skin_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cabbit["skin"] = skin_id
     cabbit_db.save_cabbit(uid, cabbit)
     r_em = SkinStorage.RARITY_EMOJI.get(s.get("rarity", "common"), "⚪")
-    await q.edit_message_text(
-        f"✅ Скин изменён: {r_em} <b>{s['display_name']}</b>",
-        parse_mode="HTML",
-    )
+    text = f"✅ Скин изменён: {r_em} <b>{s['display_name']}</b>"
+    try:
+        await q.edit_message_caption(caption=text, parse_mode="HTML")
+    except Exception:
+        await q.edit_message_text(text, parse_mode="HTML")
 
 
 async def cmd_shop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2524,8 +2526,29 @@ async def handle_reply_keyboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(buttons),
         )
 
-    elif text == "🏴‍☠️ Рейд":
-        await cmd_raid(update, ctx)
+    elif text == "⚔️ Бой":
+        cabbit = cabbit_db.get(uid)
+        if not cabbit or cabbit.get("dead"):
+            await update.message.reply_text("❌ Нет кеббита. /cabbit")
+            return
+        now = int(time.time())
+        buttons = []
+        raid_cd = cabbit.get("last_raid", 0) + RAID_COOLDOWN
+        if now >= raid_cd:
+            buttons.append([InlineKeyboardButton("🏴‍☠️ Рейд", callback_data="cabbit:raid")])
+        else:
+            left = raid_cd - now
+            buttons.append([InlineKeyboardButton(f"🏴‍☠️ Рейд (⏳ {left // 60}м)", callback_data="cabbit:raid")])
+        tokens = cabbit.get("duel_tokens", 0)
+        if tokens > 0:
+            buttons.append([InlineKeyboardButton(f"🥊 Дуэль (жетонов: {tokens})", callback_data="cabbit:duel")])
+        else:
+            buttons.append([InlineKeyboardButton("🥊 Дуэль (нет жетонов)", callback_data="cabbit:refresh")])
+        await update.message.reply_text(
+            "⚔️ <b>Бой</b>\n\n🏴‍☠️ Рейд — украсть XP (40% шанс)\n🥊 Дуэль — камень-ножницы-бумага",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
 
     elif text == "📋 Квесты":
         from quests import cmd_quests
