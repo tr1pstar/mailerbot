@@ -196,6 +196,139 @@ class CabbitStorage:
 cabbit_db = CabbitStorage()
 
 
+# ─── Хранилище скинов ─────────────────────────────────────────────────────────
+
+SKIN_LEVEL_INTERVAL = 5   # каждые 5 уровней — скин
+COINS_PER_BOX       = (5, 30)
+COINS_DAILY_BONUS   = 50
+COINS_RAID_OK       = 15
+
+
+class SkinStorage:
+    """
+    {
+      "skin_id": {
+        "file_id":      "AgACAgIAAxk...",
+        "display_name": "Огненный кот",
+        "rarity":       "epic",
+        "drop_chance":  0.5,       # % из коробки (0 = не дропается)
+        "level_weight": 10,        # вес для розыгрыша за уровни (0 = нет)
+        "shop_price":   null,      # цена в монетах (null = не в магазине)
+        "added_by":     123456,
+        "added_at":     1711234567
+      }
+    }
+    """
+    FILE  = "/app/data/skins.json"
+    _lock = Lock()
+
+    RARITY_EMOJI = {
+        "common":    "⚪",
+        "rare":      "🔵",
+        "epic":      "🟣",
+        "legendary": "🟡",
+    }
+
+    def _load(self) -> dict:
+        if not os.path.exists(self.FILE):
+            return {}
+        try:
+            with open(self.FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _save(self, data: dict) -> None:
+        with open(self.FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    def get_all(self) -> dict:
+        return self._load()
+
+    def get(self, skin_id: str) -> dict | None:
+        return self._load().get(skin_id)
+
+    def add(self, skin_id: str, file_id: str, display_name: str,
+            rarity: str = "common", added_by: int = 0) -> None:
+        with self._lock:
+            data = self._load()
+            data[skin_id] = {
+                "file_id": file_id,
+                "display_name": display_name,
+                "rarity": rarity,
+                "drop_chance": 0,
+                "level_weight": 0,
+                "shop_price": None,
+                "added_by": added_by,
+                "added_at": int(time.time()),
+            }
+            self._save(data)
+
+    def update(self, skin_id: str, **fields) -> bool:
+        with self._lock:
+            data = self._load()
+            if skin_id not in data:
+                return False
+            data[skin_id].update(fields)
+            self._save(data)
+            return True
+
+    def remove(self, skin_id: str) -> bool:
+        with self._lock:
+            data = self._load()
+            if skin_id in data:
+                del data[skin_id]
+                self._save(data)
+                return True
+            return False
+
+    def get_droppable(self) -> list[tuple[str, dict]]:
+        return [(k, v) for k, v in self._load().items()
+                if v.get("drop_chance", 0) > 0]
+
+    def get_level_pool(self) -> list[tuple[str, dict]]:
+        return [(k, v) for k, v in self._load().items()
+                if v.get("level_weight", 0) > 0]
+
+    def get_shop(self) -> list[tuple[str, dict]]:
+        return [(k, v) for k, v in self._load().items()
+                if v.get("shop_price") is not None and v["shop_price"] > 0]
+
+
+skin_db = SkinStorage()
+
+
+def roll_skin_drop(owned_skins: list[str]) -> tuple[str, dict] | None:
+    """Попытка дропа скина из коробки. Возвращает (id, data) или None."""
+    for skin_id, skin in skin_db.get_droppable():
+        if skin_id in owned_skins:
+            continue
+        if random.random() * 100 < skin.get("drop_chance", 0):
+            return skin_id, skin
+    return None
+
+
+def roll_skin_level(owned_skins: list[str]) -> tuple[str, dict] | None:
+    """Выбор скина за достижение уровня (по весам). Возвращает (id, data) или None."""
+    pool = [(sid, s) for sid, s in skin_db.get_level_pool() if sid not in owned_skins]
+    if not pool:
+        return None
+    weights = [s.get("level_weight", 1) for _, s in pool]
+    chosen = random.choices(pool, weights=weights, k=1)[0]
+    return chosen
+
+
+def get_cabbit_photo(cabbit: dict) -> str | None:
+    """Возвращает file_id текущего скина или None (= дефолт)."""
+    skin_id = cabbit.get("skin")
+    if not skin_id:
+        return None
+    skin = skin_db.get(skin_id)
+    if skin:
+        return skin.get("file_id")
+    return None
+
+
 # ─── Игровая логика ───────────────────────────────────────────────────────────
 
 def roll_box(uid: str) -> tuple[str, str, int, bool]:
@@ -264,6 +397,16 @@ def cabbit_status(cabbit: dict) -> str:
     tokens     = cabbit.get("duel_tokens", 0)
     token_str  = f"\n🥊 Жетонов: <b>{tokens}</b>" if tokens > 0 else ""
     crown_str  = f"\n👑 Корона: x2 XP ещё <b>{cabbit.get('crown_boxes', 0)}</b> коробок" if cabbit.get("crown_boxes", 0) > 0 else ""
+    coins      = cabbit.get("coins", 0)
+    coins_str  = f"\n🪙 Монеты: <b>{coins}</b>"
+
+    skin_id = cabbit.get("skin")
+    skin_str = ""
+    if skin_id:
+        skin_data = skin_db.get(skin_id)
+        if skin_data:
+            r_emoji = SkinStorage.RARITY_EMOJI.get(skin_data.get("rarity", "common"), "⚪")
+            skin_str = f"\n🎨 Скин: {r_emoji} <b>{skin_data['display_name']}</b>"
 
     stars = cabbit.get("prestige_stars", 0)
     stars_str = f" {'⭐' * stars}" if stars > 0 else ""
@@ -276,7 +419,7 @@ def cabbit_status(cabbit: dict) -> str:
         f"❤️ Здоровье:\n{hunger_bar(cabbit)}\n\n"
         f"🍽 Еда: {food_str}\n"
         f"🎒 Инвентарь: {inv_str}"
-        f"{knife_str}{token_str}{crown_str}\n\n"
+        f"{knife_str}{token_str}{crown_str}{coins_str}{skin_str}\n\n"
         f"{box_str}"
     )
 
@@ -458,6 +601,14 @@ async def _send_cabbit_card(msg, cabbit: dict):
     check_sickness(cabbit)
     status = cabbit_status(cabbit)
     kb     = cabbit_keyboard(cabbit)
+    # Попробовать скин → fallback на дефолт фото → текст
+    skin_file_id = get_cabbit_photo(cabbit)
+    if skin_file_id:
+        try:
+            await msg.reply_photo(photo=skin_file_id, caption=status, parse_mode="HTML", reply_markup=kb)
+            return
+        except Exception:
+            pass
     if os.path.exists(CABBIT_PHOTO):
         try:
             with open(CABBIT_PHOTO, "rb") as f:
@@ -598,6 +749,51 @@ async def callback_cabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 text_parts.append(f"\n\n🎉 <b>УРОВЕНЬ {new_level}!</b>")
                 if new_evo != evo:
                     text_parts.append(f"\n✨ <b>ЭВОЛЮЦИЯ: {new_evo['emoji']} {new_evo['name']}!</b>")
+
+                # Скин за уровень (каждые SKIN_LEVEL_INTERVAL уровней)
+                if new_level % SKIN_LEVEL_INTERVAL == 0:
+                    owned = cabbit.get("skins", [])
+                    lvl_skin = roll_skin_level(owned)
+                    if lvl_skin:
+                        s_id, s_data = lvl_skin
+                        if s_id not in owned:
+                            cabbit.setdefault("skins", []).append(s_id)
+                        r_em = SkinStorage.RARITY_EMOJI.get(s_data.get("rarity", "common"), "⚪")
+                        text_parts.append(
+                            f"\n\n🎨 <b>СКИН ЗА УРОВЕНЬ!</b>\n"
+                            f"  {r_em} <b>{s_data['display_name']}</b>\n"
+                            f"  Выбрать: /skins"
+                        )
+                    else:
+                        bonus_coins = 50
+                        cabbit["coins"] = cabbit.get("coins", 0) + bonus_coins
+                        text_parts.append(f"\n\n🪙 Все скины за уровни уже есть! +{bonus_coins} монет")
+
+        # Coins
+        coin_gain = random.randint(*COINS_PER_BOX)
+        last_box_day = cabbit.get("last_box_day", "")
+        today = time.strftime("%Y-%m-%d")
+        if last_box_day != today:
+            coin_gain += COINS_DAILY_BONUS
+            cabbit["last_box_day"] = today
+            text_parts.append(f"\n\n🪙 +{coin_gain} монет (🌟 дневной бонус +{COINS_DAILY_BONUS}!)")
+        else:
+            text_parts.append(f"\n🪙 +{coin_gain} монет")
+        cabbit["coins"] = cabbit.get("coins", 0) + coin_gain
+
+        # Skin drop from box
+        if not got_knife:
+            owned = cabbit.get("skins", [])
+            skin_drop = roll_skin_drop(owned)
+            if skin_drop:
+                s_id, s_data = skin_drop
+                cabbit.setdefault("skins", []).append(s_id)
+                r_em = SkinStorage.RARITY_EMOJI.get(s_data.get("rarity", "common"), "⚪")
+                text_parts.append(
+                    f"\n\n🎨🎉 <b>ВЫПАЛ СКИН!</b>\n"
+                    f"  {r_em} <b>{s_data['display_name']}</b>\n"
+                    f"  Выбрать: /skins"
+                )
 
         # Item drop
         if item_drop:
@@ -780,15 +976,21 @@ async def callback_kill(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cabbit_db.save_cabbit(attacker_uid, attacker)
 
     try:
-        await ctx.application.bot.send_message(
-            chat_id=int(target_uid),
-            text=(
-                f"💀 <b>{target_name} был убит!</b>\n\n"
-                f"🔪 Кеббит <b>{attacker_name}</b> нанёс смертельный удар ножом.\n"
-                f"Напиши /cabbit чтобы завести нового."
-            ),
-            parse_mode="HTML",
+        kill_text = (
+            f"💀 <b>{target_name} был убит!</b>\n\n"
+            f"🔪 Кеббит <b>{attacker_name}</b> нанёс смертельный удар ножом.\n"
+            f"Напиши /cabbit чтобы завести нового."
         )
+        att_photo = get_cabbit_photo(attacker)
+        if att_photo:
+            await ctx.application.bot.send_photo(
+                chat_id=int(target_uid), photo=att_photo,
+                caption=kill_text, parse_mode="HTML",
+            )
+        else:
+            await ctx.application.bot.send_message(
+                chat_id=int(target_uid), text=kill_text, parse_mode="HTML",
+            )
     except Exception as e:
         logger.warning(f"kill notify target={target_uid}: {e}")
 
@@ -857,21 +1059,29 @@ async def _do_raid(q, ctx, uid: str, cabbit: dict):
         cabbit_db.save_cabbit(target_uid, target_cab)
 
         try:
-            await ctx.application.bot.send_message(
-                chat_id=int(target_uid),
-                text=(
-                    f"🏴‍☠️ <b>Рейд!</b>\n\n"
-                    f"{cabbit['name']} украл <b>{stolen} XP</b> у {target_cab['name']}!"
-                ),
-                parse_mode="HTML",
+            raid_text = (
+                f"🏴‍☠️ <b>Рейд!</b>\n\n"
+                f"{cabbit['name']} украл <b>{stolen} XP</b> у {target_cab['name']}!"
             )
+            raid_photo = get_cabbit_photo(cabbit)
+            if raid_photo:
+                await ctx.application.bot.send_photo(
+                    chat_id=int(target_uid), photo=raid_photo,
+                    caption=raid_text, parse_mode="HTML",
+                )
+            else:
+                await ctx.application.bot.send_message(
+                    chat_id=int(target_uid), text=raid_text, parse_mode="HTML",
+                )
         except Exception:
             pass
 
         text = (
             f"🏴‍☠️ <b>Рейд успешен!</b>\n\n"
             f"Украл <b>{stolen} XP</b> у {target_cab['name']}!\n"
+            f"🪙 +{COINS_RAID_OK} монет\n"
         )
+        cabbit["coins"] = cabbit.get("coins", 0) + COINS_RAID_OK
     else:
         lost = max(1, int(cabbit.get("xp", 0) * 0.05))
         cabbit["xp"] = max(0, cabbit.get("xp", 0) - lost)
@@ -1313,6 +1523,501 @@ async def cmd_broadcast(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"✅ Доставлено: {sent}\n"
         f"❌ Не доставлено: {failed}"
     )
+
+
+# ─── Скины: игроки ───────────────────────────────────────────────────────────
+
+async def cmd_skins(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Показать свои скины и выбрать активный."""
+    uid    = str(update.effective_user.id)
+    cabbit = cabbit_db.get(uid)
+    if not cabbit or cabbit.get("dead"):
+        await update.message.reply_text("❌ Сначала создай кеббита через /cabbit")
+        return
+
+    owned  = cabbit.get("skins", [])
+    cur    = cabbit.get("skin")
+    all_sk = skin_db.get_all()
+
+    if not owned:
+        await update.message.reply_text(
+            "🎨 У тебя пока нет скинов.\n\n"
+            "Скины можно получить из коробок, за уровни или купить в /shop"
+        )
+        return
+
+    lines  = ["🎨 <b>Твои скины:</b>\n"]
+    buttons = []
+
+    # Кнопка дефолтного скина
+    mark = " ✅" if cur is None else ""
+    buttons.append([InlineKeyboardButton(f"🐰 Стандартный{mark}", callback_data="skin_sel:default")])
+
+    for s_id in owned:
+        s = all_sk.get(s_id)
+        if not s:
+            continue
+        r_em = SkinStorage.RARITY_EMOJI.get(s.get("rarity", "common"), "⚪")
+        mark = " ✅" if cur == s_id else ""
+        lines.append(f"  {r_em} <b>{s['display_name']}</b>{mark}")
+        buttons.append([InlineKeyboardButton(
+            f"{r_em} {s['display_name']}{mark}",
+            callback_data=f"skin_sel:{s_id}"
+        )])
+
+    await update.message.reply_text(
+        "\n".join(lines) + "\n\nВыбери скин:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def callback_skin_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q   = update.callback_query
+    await q.answer()
+    uid     = str(q.from_user.id)
+    skin_id = q.data.split(":")[1]
+    cabbit  = cabbit_db.get(uid)
+    if not cabbit or cabbit.get("dead"):
+        await q.answer("❌ Кеббит не найден.", show_alert=True)
+        return
+
+    if skin_id == "default":
+        cabbit["skin"] = None
+        cabbit_db.save_cabbit(uid, cabbit)
+        await q.edit_message_text("✅ Скин сброшен на стандартный.")
+        return
+
+    if skin_id not in cabbit.get("skins", []):
+        await q.answer("У тебя нет этого скина!", show_alert=True)
+        return
+
+    s = skin_db.get(skin_id)
+    if not s:
+        await q.answer("Скин не найден в каталоге!", show_alert=True)
+        return
+
+    cabbit["skin"] = skin_id
+    cabbit_db.save_cabbit(uid, cabbit)
+    r_em = SkinStorage.RARITY_EMOJI.get(s.get("rarity", "common"), "⚪")
+    await q.edit_message_text(
+        f"✅ Скин изменён: {r_em} <b>{s['display_name']}</b>",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_shop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Магазин скинов за монеты."""
+    uid    = str(update.effective_user.id)
+    cabbit = cabbit_db.get(uid)
+    if not cabbit or cabbit.get("dead"):
+        await update.message.reply_text("❌ Сначала создай кеббита через /cabbit")
+        return
+
+    shop   = skin_db.get_shop()
+    owned  = cabbit.get("skins", [])
+    coins  = cabbit.get("coins", 0)
+
+    if not shop:
+        await update.message.reply_text("🏪 Магазин пока пуст. Загляни позже!")
+        return
+
+    lines   = [f"🏪 <b>Магазин скинов</b>\n🪙 Баланс: <b>{coins}</b> монет\n"]
+    buttons = []
+
+    for s_id, s in shop:
+        r_em  = SkinStorage.RARITY_EMOJI.get(s.get("rarity", "common"), "⚪")
+        price = s["shop_price"]
+        if s_id in owned:
+            lines.append(f"  {r_em} <b>{s['display_name']}</b> — ✅ куплено")
+        else:
+            lines.append(f"  {r_em} <b>{s['display_name']}</b> — 🪙 {price}")
+            buttons.append([InlineKeyboardButton(
+                f"🪙 {price} — {s['display_name']}",
+                callback_data=f"shop_buy:{s_id}"
+            )])
+
+    kb = InlineKeyboardMarkup(buttons) if buttons else None
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML", reply_markup=kb)
+
+
+async def callback_shop_buy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q       = update.callback_query
+    await q.answer()
+    uid     = str(q.from_user.id)
+    skin_id = q.data.split(":")[1]
+    cabbit  = cabbit_db.get(uid)
+    if not cabbit or cabbit.get("dead"):
+        await q.answer("❌ Кеббит не найден.", show_alert=True)
+        return
+
+    s = skin_db.get(skin_id)
+    if not s or s.get("shop_price") is None:
+        await q.answer("Этот скин не продаётся!", show_alert=True)
+        return
+
+    if skin_id in cabbit.get("skins", []):
+        await q.answer("У тебя уже есть этот скин!", show_alert=True)
+        return
+
+    price = s["shop_price"]
+    coins = cabbit.get("coins", 0)
+    if coins < price:
+        await q.answer(f"Не хватает монет! Нужно {price}, у тебя {coins}.", show_alert=True)
+        return
+
+    cabbit["coins"] = coins - price
+    cabbit.setdefault("skins", []).append(skin_id)
+    cabbit_db.save_cabbit(uid, cabbit)
+
+    r_em = SkinStorage.RARITY_EMOJI.get(s.get("rarity", "common"), "⚪")
+    await q.edit_message_text(
+        f"✅ Куплен скин: {r_em} <b>{s['display_name']}</b>\n"
+        f"🪙 -{price} монет (осталось: {cabbit['coins']})\n\n"
+        f"Выбрать: /skins",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_profile(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    /profile <имя или user_id> — посмотреть чужого кеббита с его скином.
+    Без аргументов — свой.
+    """
+    uid  = str(update.effective_user.id)
+    args = (update.message.text or "").split(maxsplit=1)
+    query = args[1].strip() if len(args) > 1 else None
+
+    if not query:
+        # Свой профиль
+        cabbit = cabbit_db.get(uid)
+        if not cabbit or cabbit.get("dead"):
+            await update.message.reply_text("❌ У тебя нет живого кеббита.")
+            return
+        check_sickness(cabbit)
+        cabbit_db.save_cabbit(uid, cabbit)
+        await _send_profile(update.message, cabbit)
+        return
+
+    # Ищем по uid или имени
+    all_ = cabbit_db.get_all()
+    target_cab = None
+
+    if query in all_:
+        target_cab = all_[query]
+    else:
+        q_lower = query.lower()
+        for u, c in all_.items():
+            if c.get("name", "").lower() == q_lower:
+                target_cab = c
+                break
+
+    if not target_cab:
+        await update.message.reply_text("❌ Кеббит не найден. Укажи имя или user_id.")
+        return
+    if target_cab.get("dead"):
+        await update.message.reply_text(f"💀 <b>{target_cab.get('name', '?')}</b> мёртв.", parse_mode="HTML")
+        return
+
+    check_sickness(target_cab)
+    await _send_profile(update.message, target_cab)
+
+
+async def _send_profile(msg, cabbit: dict):
+    """Отправляет карточку кеббита (без кнопок управления) — для просмотра."""
+    check_sickness(cabbit)
+    status = cabbit_status(cabbit)
+    skin_file_id = get_cabbit_photo(cabbit)
+    if skin_file_id:
+        try:
+            await msg.reply_photo(photo=skin_file_id, caption=status, parse_mode="HTML")
+            return
+        except Exception:
+            pass
+    if os.path.exists(CABBIT_PHOTO):
+        try:
+            with open(CABBIT_PHOTO, "rb") as f:
+                await msg.reply_photo(photo=f, caption=status, parse_mode="HTML")
+            return
+        except Exception:
+            pass
+    await msg.reply_text(status, parse_mode="HTML")
+
+
+# ─── Скины: админ ─────────────────────────────────────────────────────────────
+
+async def cmd_addskin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Отправь фото с подписью: /addskin <id> <название> <редкость>
+    Редкость: common / rare / epic / legendary
+    """
+    from config import ADMIN_ID
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Только администратор.")
+        return
+
+    photo = update.message.photo
+    if not photo:
+        await update.message.reply_text(
+            "📸 Отправь <b>фото</b> с подписью:\n"
+            "<code>/addskin id Название редкость</code>\n\n"
+            "Редкость: common / rare / epic / legendary\n"
+            "Пример: <code>/addskin fire_cat Огненный кот epic</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    caption = (update.message.caption or "").strip()
+    parts   = caption.split(maxsplit=2)
+    # /addskin id Название редкость
+    if len(parts) < 3:
+        await update.message.reply_text(
+            "Подпись должна быть: /addskin <id> <название> <редкость>\n"
+            "Пример: /addskin fire_cat Огненный кот epic"
+        )
+        return
+
+    # Парсим: /addskin fire_cat Огненный кот epic
+    rest = parts[1:]  # ['fire_cat', 'Огненный кот epic']
+    # Первый токен — id, последний — редкость, остальное — название
+    tokens = caption.split()[1:]  # all tokens after /addskin
+    if len(tokens) < 3:
+        await update.message.reply_text("Нужно минимум: id, название (одно+ слово), редкость.")
+        return
+
+    skin_id  = tokens[0]
+    rarity   = tokens[-1].lower()
+    disp_name = " ".join(tokens[1:-1])
+
+    if rarity not in ("common", "rare", "epic", "legendary"):
+        await update.message.reply_text("Редкость должна быть: common / rare / epic / legendary")
+        return
+
+    file_id = photo[-1].file_id
+    skin_db.add(skin_id, file_id, disp_name, rarity, update.effective_user.id)
+
+    r_em = SkinStorage.RARITY_EMOJI.get(rarity, "⚪")
+    await update.message.reply_text(
+        f"✅ Скин добавлен!\n\n"
+        f"ID: <code>{skin_id}</code>\n"
+        f"Название: {r_em} <b>{disp_name}</b>\n"
+        f"Редкость: {rarity}\n\n"
+        f"Настрой параметры:\n"
+        f"/skindrop {skin_id} 1.5  — шанс из коробки\n"
+        f"/skinlevel {skin_id} 10  — вес за уровни\n"
+        f"/skinprice {skin_id} 500 — цена в магазине",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_skindrop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/skindrop <id> <шанс%>"""
+    from config import ADMIN_ID
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Только администратор.")
+        return
+    args = (update.message.text or "").split()
+    if len(args) < 3:
+        await update.message.reply_text("Использование: /skindrop <id> <шанс%>\nПример: /skindrop fire_cat 1.5")
+        return
+    skin_id = args[1]
+    try:
+        chance = float(args[2])
+    except ValueError:
+        await update.message.reply_text("Шанс должен быть числом (например 1.5)")
+        return
+    if not skin_db.update(skin_id, drop_chance=chance):
+        await update.message.reply_text(f"❌ Скин <code>{skin_id}</code> не найден.", parse_mode="HTML")
+        return
+    await update.message.reply_text(f"✅ Шанс дропа <code>{skin_id}</code> из коробки: <b>{chance}%</b>", parse_mode="HTML")
+
+
+async def cmd_skinlevel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/skinlevel <id> <вес>"""
+    from config import ADMIN_ID
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Только администратор.")
+        return
+    args = (update.message.text or "").split()
+    if len(args) < 3:
+        await update.message.reply_text("Использование: /skinlevel <id> <вес>\nПример: /skinlevel fire_cat 10")
+        return
+    skin_id = args[1]
+    try:
+        weight = int(args[2])
+    except ValueError:
+        await update.message.reply_text("Вес должен быть целым числом.")
+        return
+    if not skin_db.update(skin_id, level_weight=weight):
+        await update.message.reply_text(f"❌ Скин <code>{skin_id}</code> не найден.", parse_mode="HTML")
+        return
+    await update.message.reply_text(f"✅ Вес <code>{skin_id}</code> за уровни: <b>{weight}</b>", parse_mode="HTML")
+
+
+async def cmd_skinprice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/skinprice <id> <цена>  (0 = убрать из магазина)"""
+    from config import ADMIN_ID
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Только администратор.")
+        return
+    args = (update.message.text or "").split()
+    if len(args) < 3:
+        await update.message.reply_text("Использование: /skinprice <id> <цена>\n0 = убрать из магазина")
+        return
+    skin_id = args[1]
+    try:
+        price = int(args[2])
+    except ValueError:
+        await update.message.reply_text("Цена должна быть целым числом.")
+        return
+    actual = price if price > 0 else None
+    if not skin_db.update(skin_id, shop_price=actual):
+        await update.message.reply_text(f"❌ Скин <code>{skin_id}</code> не найден.", parse_mode="HTML")
+        return
+    if actual:
+        await update.message.reply_text(f"✅ <code>{skin_id}</code> в магазине за <b>{actual} 🪙</b>", parse_mode="HTML")
+    else:
+        await update.message.reply_text(f"✅ <code>{skin_id}</code> убран из магазина.", parse_mode="HTML")
+
+
+async def cmd_removeskin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/removeskin <id>"""
+    from config import ADMIN_ID
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Только администратор.")
+        return
+    args = (update.message.text or "").split()
+    if len(args) < 2:
+        await update.message.reply_text("Использование: /removeskin <id>")
+        return
+    skin_id = args[1]
+    if not skin_db.remove(skin_id):
+        await update.message.reply_text(f"❌ Скин <code>{skin_id}</code> не найден.", parse_mode="HTML")
+        return
+    await update.message.reply_text(f"🗑 Скин <code>{skin_id}</code> удалён.", parse_mode="HTML")
+
+
+async def cmd_giveskin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/giveskin <user_id> <skin_id>"""
+    from config import ADMIN_ID
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Только администратор.")
+        return
+    args = (update.message.text or "").split()
+    if len(args) < 3:
+        await update.message.reply_text("Использование: /giveskin <user_id> <skin_id>")
+        return
+    target_uid, skin_id = args[1], args[2]
+    cabbit = cabbit_db.get(target_uid)
+    if not cabbit:
+        await update.message.reply_text(f"❌ Кеббит uid <code>{target_uid}</code> не найден.", parse_mode="HTML")
+        return
+    s = skin_db.get(skin_id)
+    if not s:
+        await update.message.reply_text(f"❌ Скин <code>{skin_id}</code> не найден в каталоге.", parse_mode="HTML")
+        return
+    owned = cabbit.setdefault("skins", [])
+    if skin_id in owned:
+        await update.message.reply_text("У игрока уже есть этот скин.")
+        return
+    owned.append(skin_id)
+    cabbit_db.save_cabbit(target_uid, cabbit)
+
+    r_em = SkinStorage.RARITY_EMOJI.get(s.get("rarity", "common"), "⚪")
+    try:
+        await ctx.application.bot.send_message(
+            chat_id=int(target_uid),
+            text=(
+                f"🎁 <b>Подарок от администратора!</b>\n\n"
+                f"Получен скин: {r_em} <b>{s['display_name']}</b>\n"
+                f"Выбрать: /skins"
+            ),
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+    await update.message.reply_text(
+        f"✅ Скин {r_em} <b>{s['display_name']}</b> выдан игроку <code>{target_uid}</code>",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_addcoins(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/addcoins <user_id> <кол-во> <причина>"""
+    from config import ADMIN_ID
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Только администратор.")
+        return
+    args = (update.message.text or "").split(maxsplit=3)
+    if len(args) < 4:
+        await update.message.reply_text("Использование: /addcoins <user_id> <кол-во> <причина>")
+        return
+    target_uid = args[1]
+    try:
+        amount = int(args[2])
+    except ValueError:
+        await update.message.reply_text("Количество должно быть числом.")
+        return
+    reason = args[3]
+
+    cabbit = cabbit_db.get(target_uid)
+    if not cabbit:
+        await update.message.reply_text(f"❌ Кеббит <code>{target_uid}</code> не найден.", parse_mode="HTML")
+        return
+
+    cabbit["coins"] = max(0, cabbit.get("coins", 0) + amount)
+    cabbit_db.save_cabbit(target_uid, cabbit)
+    sign = "+" if amount > 0 else ""
+
+    try:
+        await ctx.application.bot.send_message(
+            chat_id=int(target_uid),
+            text=(
+                f"🪙 <b>Начисление от администратора</b>\n\n"
+                f"💰 <b>{sign}{amount} монет</b>\n"
+                f"📝 Причина: <i>{reason}</i>\n"
+                f"Баланс: <b>{cabbit['coins']} 🪙</b>"
+            ),
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+    await update.message.reply_text(
+        f"✅ {sign}{amount} 🪙 → <code>{target_uid}</code>. Причина: {reason}",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_listskins(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/listskins — список всех скинов с настройками."""
+    from config import ADMIN_ID
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Только администратор.")
+        return
+    all_sk = skin_db.get_all()
+    if not all_sk:
+        await update.message.reply_text("Каталог скинов пуст. Добавь через /addskin")
+        return
+
+    lines = ["🎨 <b>Каталог скинов (админ):</b>\n"]
+    for s_id, s in all_sk.items():
+        r_em  = SkinStorage.RARITY_EMOJI.get(s.get("rarity", "common"), "⚪")
+        drop  = s.get("drop_chance", 0)
+        lvl_w = s.get("level_weight", 0)
+        price = s.get("shop_price")
+        price_str = f"🪙{price}" if price else "—"
+        lines.append(
+            f"\n{r_em} <b>{s.get('display_name', s_id)}</b>\n"
+            f"  ID: <code>{s_id}</code>\n"
+            f"  Коробка: {drop}% | Уровень: вес {lvl_w} | Магазин: {price_str}"
+        )
+
+    text = "\n".join(lines)
+    if len(text) > 4000:
+        for i in range(0, len(text), 4000):
+            await update.message.reply_text(text[i:i+4000], parse_mode="HTML")
+    else:
+        await update.message.reply_text(text, parse_mode="HTML")
 
 
 async def cmd_leaderboard(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

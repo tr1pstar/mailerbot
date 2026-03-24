@@ -28,6 +28,10 @@ from cabbit import (
     callback_kill, cmd_knife, cmd_leaderboard, cmd_raid,
     cmd_prestige, callback_use_item, cmd_bancabbit, cmd_cabbitlist,
     cmd_broadcast, cmd_addxp,
+    cmd_skins, callback_skin_select, cmd_shop, callback_shop_buy,
+    cmd_profile,
+    cmd_addskin, cmd_skindrop, cmd_skinlevel, cmd_skinprice,
+    cmd_removeskin, cmd_giveskin, cmd_addcoins, cmd_listskins,
     box_notifier, NAMING_STATE, cabbit_db,
 )
 from duel import (
@@ -834,6 +838,21 @@ def main() -> None:
     app.add_handler(CommandHandler("cabbitlist",   cmd_cabbitlist))
     app.add_handler(CommandHandler("broadcast",    cmd_broadcast))
     app.add_handler(CommandHandler("addxp",        cmd_addxp))
+    # Skins — players
+    app.add_handler(CommandHandler("skins",        cmd_skins))
+    app.add_handler(CommandHandler("shop",         cmd_shop))
+    app.add_handler(CommandHandler("profile",      cmd_profile))
+    app.add_handler(CallbackQueryHandler(callback_skin_select, pattern=r"^skin_sel:"))
+    app.add_handler(CallbackQueryHandler(callback_shop_buy,    pattern=r"^shop_buy:"))
+    # Skins — admin
+    app.add_handler(CommandHandler("addskin",      cmd_addskin))
+    app.add_handler(CommandHandler("skindrop",     cmd_skindrop))
+    app.add_handler(CommandHandler("skinlevel",    cmd_skinlevel))
+    app.add_handler(CommandHandler("skinprice",    cmd_skinprice))
+    app.add_handler(CommandHandler("removeskin",   cmd_removeskin))
+    app.add_handler(CommandHandler("giveskin",     cmd_giveskin))
+    app.add_handler(CommandHandler("addcoins",     cmd_addcoins))
+    app.add_handler(CommandHandler("listskins",    cmd_listskins))
     app.add_handler(CommandHandler("promo",        cmd_promo))
     app.add_handler(CommandHandler("createpromo",  cmd_createpromo))
     app.add_handler(CommandHandler("listpromos",   cmd_listpromos))
