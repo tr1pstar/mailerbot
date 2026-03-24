@@ -376,6 +376,18 @@ async def _finish_duel(app, challenger: str, target_uid: str, duel: dict, last_t
     if not c_cab or not t_cab:
         return
 
+    # Проверка: мертвые кеббиты не дуэлят
+    c_dead = c_cab.get("dead")
+    t_dead = t_cab.get("dead")
+    if c_dead or t_dead:
+        cancel_text = last_text + "\n\n❌ <b>Дуэль отменена — один из кеббитов мёртв.</b>"
+        for uid in (challenger, target_uid):
+            try:
+                await app.bot.send_message(chat_id=int(uid), text=cancel_text, parse_mode="HTML")
+            except Exception:
+                pass
+        return
+
     if cs == ts:
         text = last_text + "\n🤝 <b>Ничья! XP не меняется.</b>"
         for uid in (challenger, target_uid):
@@ -392,14 +404,19 @@ async def _finish_duel(app, challenger: str, target_uid: str, duel: dict, last_t
         winner_uid, loser_uid = target_uid, challenger
         winner_cab, loser_cab = t_cab, c_cab
 
-    apply_xp(winner_cab, stake)
-    loser_cab["xp"]  = max(0, loser_cab.get("xp", 0) - stake)
+    # Перевалидация ставки: лузер мог потратить XP пока дуэль шла
+    actual_stake = min(stake, loser_cab.get("xp", 0))
+    if actual_stake < 1:
+        actual_stake = 1
+
+    leveled_up, new_level = apply_xp(winner_cab, actual_stake)
+    loser_cab["xp"] = max(0, loser_cab.get("xp", 0) - actual_stake)
 
     # Stats
     w_stats = winner_cab.setdefault("stats", {})
     l_stats = loser_cab.setdefault("stats", {})
     w_stats["duels_won"]      = w_stats.get("duels_won", 0) + 1
-    w_stats["xp_earned_total"] = w_stats.get("xp_earned_total", 0) + stake
+    w_stats["xp_earned_total"] = w_stats.get("xp_earned_total", 0) + actual_stake
     l_stats["duels_lost"]     = l_stats.get("duels_lost", 0) + 1
 
     # Quest progress
@@ -409,10 +426,15 @@ async def _finish_duel(app, challenger: str, target_uid: str, duel: dict, last_t
     # Achievements
     from achievements import check_achievements, unlock_achievements
     ach_text_w = ""
+    lvl_text = f"\n🎉 <b>УРОВЕНЬ {new_level}!</b>" if leveled_up else ""
     new_achs = check_achievements(winner_cab)
     if new_achs:
         bonus = unlock_achievements(winner_cab, new_achs)
-        apply_xp(winner_cab, bonus)
+        lvl2, new_level2 = apply_xp(winner_cab, bonus)
+        if lvl2 and not leveled_up:
+            lvl_text = f"\n🎉 <b>УРОВЕНЬ {new_level2}!</b>"
+        elif lvl2:
+            lvl_text = f"\n🎉 <b>УРОВЕНЬ {new_level2}!</b>"
         ach_text_w = f"\n\n{'━' * 20}\n🏆 <b>ДОСТИЖЕНИЕ РАЗБЛОКИРОВАНО!</b>"
         for a in new_achs:
             ach_text_w += f"\n  {a['emoji']} <b>{a['name']}</b> — {a['desc']}\n  💰 +{a['reward']} XP"
@@ -424,8 +446,8 @@ async def _finish_duel(app, challenger: str, target_uid: str, duel: dict, last_t
     from cabbit import get_cabbit_photo
     winner_photo = get_cabbit_photo(winner_cab)
 
-    win_text = last_text + f"\n🏆 <b>{winner_cab['name']} победил!</b>\n✨ +{stake} XP{ach_text_w}"
-    lose_text = last_text + f"\n💀 <b>{loser_cab['name']} проиграл!</b>\n💔 -{stake} XP"
+    win_text = last_text + f"\n🏆 <b>{winner_cab['name']} победил!</b>\n✨ +{actual_stake} XP{lvl_text}{ach_text_w}"
+    lose_text = last_text + f"\n💀 <b>{loser_cab['name']} проиграл!</b>\n💔 -{actual_stake} XP"
 
     # Winner notification
     try:

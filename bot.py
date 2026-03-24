@@ -34,6 +34,8 @@ from cabbit import (
     cmd_addskin, handle_addskin_photo, cmd_skindrop, cmd_skinlevel, cmd_skinprice,
     cmd_removeskin, cmd_giveskin, cmd_addcoins, cmd_listskins,
     box_notifier, NAMING_STATE, cabbit_db,
+    handle_reply_keyboard, get_reply_keyboard, REPLY_KB_LABELS,
+    callback_duel_page,
 )
 from duel import (
     callback_duel_send, callback_duel_stake,
@@ -402,6 +404,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "  /inbox — читать письма\n"
         "  /remove — удалить почту\n",
         parse_mode="HTML",
+        reply_markup=get_reply_keyboard(),
     )
 
 
@@ -419,8 +422,12 @@ async def cmd_helpcabbit(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         "  /achievements — достижения\n"
         "  /leaderboard — топ игроков\n"
         "  /prestige — престиж (ур. 30+)\n"
-        "  /knife — использовать нож\n",
+        "  /knife — использовать нож\n"
+        "  /skins — скины\n"
+        "  /shop — магазин\n"
+        "  /profile — профиль\n",
         parse_mode="HTML",
+        reply_markup=get_reply_keyboard(),
     )
 
 
@@ -819,11 +826,14 @@ def main() -> None:
         fallbacks=[CommandHandler("cancel", cancel)],
     )
     app.add_handler(cabbit_conv)
+    _kb_re = "|".join(re.escape(s) for s in REPLY_KB_LABELS)
+    app.add_handler(MessageHandler(filters.Regex(f"^({_kb_re})$"), handle_reply_keyboard))
     app.add_handler(CallbackQueryHandler(callback_rules,   pattern=r"^rules:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name_from_rules), group=1)
     app.add_handler(CallbackQueryHandler(callback_cabbit,  pattern=r"^cabbit:"))
     app.add_handler(CallbackQueryHandler(callback_casino_bet, pattern=r"^casino_bet:"))
     app.add_handler(CallbackQueryHandler(callback_kill,         pattern=r"^kill:"))
+    app.add_handler(CallbackQueryHandler(callback_duel_page,    pattern=r"^duel_page:"))
     app.add_handler(CallbackQueryHandler(callback_duel_send,    pattern=r"^duel_send:"))
     app.add_handler(CallbackQueryHandler(callback_duel_stake,   pattern=r"^duel_stake:"))
     app.add_handler(CallbackQueryHandler(callback_duel_accept,  pattern=r"^duel_accept:"))
